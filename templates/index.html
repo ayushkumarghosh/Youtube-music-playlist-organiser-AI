@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block content %}
+  {% if errors %}
+    <section class="panel">
+      <h2>Issues to fix</h2>
+      <ul class="error-list">
+        {% for error in errors %}
+          <li>{{ error }}</li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
+  <section class="grid">
+    <div class="panel">
+      <h2>1. Setup</h2>
+      <form action="/settings/save" method="post" class="stack">
+        <label>
+          <span>Azure OpenAI endpoint</span>
+          <input type="text" name="azure_openai_endpoint" value="{{ settings.azure_openai_endpoint }}" placeholder="https://your-resource.openai.azure.com">
+        </label>
+        <label>
+          <span>Azure OpenAI API key</span>
+          <input type="password" name="azure_openai_api_key" value="" placeholder="Paste your API key">
+        </label>
+        <label>
+          <span>Azure OpenAI deployment</span>
+          <input type="text" name="azure_openai_deployment" value="{{ settings.azure_openai_deployment }}" placeholder="gpt-5.4 deployment name">
+        </label>
+        <label>
+          <span>Google client secrets file</span>
+          <input type="text" name="google_client_secrets_file" value="{{ settings.google_client_secrets_file }}" placeholder="C:\path\to\client_secret.json">
+        </label>
+        <label>
+          <span>Session secret</span>
+          <input type="text" name="session_secret_value" value="" placeholder="Optional. Leave blank to keep current value.">
+        </label>
+        <button type="submit">Save setup</button>
+      </form>
+      <p class="hint">Saving runs a live Azure OpenAI probe and stores your Azure settings plus the Google OAuth file path in SQLite.</p>
+    </div>
+
+    <div class="panel">
+      <h2>2. YouTube connection</h2>
+      <p class="status">
+        {% if youtube_connected %}
+          Connected and ready.
+        {% else %}
+          Not connected yet.
+        {% endif %}
+      </p>
+      <form action="/auth/google/connect" method="post">
+        <button type="submit" {% if not settings_complete %}disabled{% endif %}>Connect YouTube</button>
+      </form>
+      <p class="hint">This opens the standard Google OAuth sign-in page so the app can read your playlists and create managed mood playlists. Those playlists should also show up in YouTube Music for the same account.</p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>3. Generate preview</h2>
+    <form action="/runs/preview" method="post" class="stack">
+      <label>
+        <span>Scope</span>
+        <select name="scope" id="scope-select" onchange="togglePlaylistSelect()">
+          <option value="all_playlists">All playlists</option>
+          <option value="single_playlist">One playlist</option>
+        </select>
+      </label>
+      <label id="playlist-select-wrap" class="hidden">
+        <span>Playlist</span>
+        <select name="selected_playlist_id">
+          {% for playlist in playlists %}
+            <option value="{{ playlist.playlist_id }}">{{ playlist.title }} ({{ playlist.item_count }} items)</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit" {% if not settings_complete or not youtube_connected %}disabled{% endif %}>Preview mood assignment</button>
+    </form>
+    <p class="hint">Managed mood playlists are excluded from the source list automatically, so the app does not re-process the playlists it created itself.</p>
+  </section>
+
+  {% if playlists %}
+    <section class="panel">
+      <h2>Available source playlists</h2>
+      <div class="playlist-list">
+        {% for playlist in playlists %}
+          <article class="playlist-card">
+            <h3>{{ playlist.title }}</h3>
+            <p>{{ playlist.item_count }} items • {{ playlist.privacy_status }}</p>
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+
+  <script>
+    function togglePlaylistSelect() {
+      const scope = document.getElementById("scope-select");
+      const wrap = document.getElementById("playlist-select-wrap");
+      wrap.classList.toggle("hidden", scope.value !== "single_playlist");
+    }
+    togglePlaylistSelect();
+  </script>
+{% endblock %}

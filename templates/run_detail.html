@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="panel">
+    <div class="run-summary">
+      <div>
+        <p class="eyebrow">Run {{ run.run_id }}</p>
+        <h2>Preview</h2>
+        <p>{{ run.summary.total_candidates }} songs reviewed, {{ run.summary.default_included_count }} included by default, {{ run.summary.excluded_count }} excluded by default.</p>
+      </div>
+      <div class="status-pill">{{ run.status.value }}</div>
+    </div>
+    <div class="run-meta">
+      <span>Scope: {{ run.scope.value }}</span>
+      {% if run.source_playlist_title %}
+        <span>Source: {{ run.source_playlist_title }}</span>
+      {% endif %}
+      <span>Created: {{ run.created_at }}</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="toolbar">
+      <div>
+        <h2>Review assignments</h2>
+        <p class="hint">Use the search box to narrow the list. Setting a mood overrides the model result. Choosing Skip removes the song from sync.</p>
+      </div>
+      <input type="search" id="filter-input" placeholder="Search title, channel, or playlist..." oninput="filterRows()">
+    </div>
+
+    <form action="/runs/apply" method="post">
+      <input type="hidden" name="run_id" value="{{ run.run_id }}">
+      <div class="table-wrap">
+        <table class="results-table">
+          <thead>
+            <tr>
+              <th>Song</th>
+              <th>Source</th>
+              <th>Model</th>
+              <th>Confidence</th>
+              <th>Reason</th>
+              <th>Final mood</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in run.items %}
+              <tr data-filter="{{ (item.title ~ ' ' ~ item.channel_title ~ ' ' ~ item.source_playlists|join(' '))|lower }}">
+                <td>
+                  <strong>{{ item.title }}</strong>
+                  <div class="subtle">{{ item.channel_title }}</div>
+                  {% if not item.is_music %}
+                    <div class="badge muted">Excluded by default</div>
+                  {% endif %}
+                </td>
+                <td>
+                  {% for source in item.source_playlists %}
+                    <div>{{ source }}{% if item.source_positions|length > loop.index0 %} • #{{ item.source_positions[loop.index0] + 1 }}{% endif %}</div>
+                  {% endfor %}
+                </td>
+                <td>{{ item.suggested_mood or "Not classified as music" }}</td>
+                <td>{{ item.confidence }}</td>
+                <td>{{ item.reason }}</td>
+                <td>
+                  <select name="mood__{{ item.video_id }}">
+                    <option value="" {% if not item.final_mood %}selected{% endif %}>Skip</option>
+                    {% for mood in mood_labels %}
+                      <option value="{{ mood }}" {% if item.final_mood == mood %}selected{% endif %}>{{ mood }}</option>
+                    {% endfor %}
+                  </select>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="actions">
+        <a class="secondary-button" href="/">Back</a>
+        <button type="submit">Apply to YouTube</button>
+      </div>
+    </form>
+  </section>
+
+  <script>
+    function filterRows() {
+      const query = document.getElementById("filter-input").value.toLowerCase().trim();
+      const rows = document.querySelectorAll("tbody tr");
+      rows.forEach((row) => {
+        const haystack = row.dataset.filter || "";
+        row.style.display = haystack.includes(query) ? "" : "none";
+      });
+    }
+  </script>
+{% endblock %}
