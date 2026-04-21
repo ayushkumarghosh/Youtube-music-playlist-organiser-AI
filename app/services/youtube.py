@@ -42,8 +42,7 @@ def is_managed_playlist(title: str, description: str = "") -> bool:
 
 
 def build_managed_playlist_title(scope: RunScope, mood: str, source_playlist_title: str | None = None) -> str:
-    source_label = "All" if scope == RunScope.ALL_PLAYLISTS else (source_playlist_title or "Selected")
-    return f"{APP_PLAYLIST_PREFIX} [{source_label}] - {mood}"
+    return mood
 
 
 def build_managed_playlist_description(scope: RunScope, mood: str, source_playlist_title: str | None = None) -> str:
@@ -52,6 +51,18 @@ def build_managed_playlist_description(scope: RunScope, mood: str, source_playli
         f"{APP_MANAGED_MARKER} Managed by YouTube Mood Playlist Organizer. "
         f"Scope: {source_label}. Mood: {mood}."
     )
+
+
+def extract_managed_playlist_mood(title: str, description: str = "") -> str | None:
+    if APP_MANAGED_MARKER in description:
+        marker = "Mood: "
+        start = description.find(marker)
+        if start != -1:
+            mood_text = description[start + len(marker) :].strip()
+            return mood_text[:-1] if mood_text.endswith(".") else mood_text
+    if title.startswith(f"{APP_PLAYLIST_PREFIX} [") and " - " in title:
+        return title.rsplit(" - ", 1)[-1].strip() or None
+    return None
 
 
 class YouTubeService:
@@ -201,14 +212,18 @@ class YouTubeService:
         source_playlist_title: str | None,
     ) -> dict[str, PlaylistSummary]:
         youtube = self._client()
-        existing = {
-            playlist.title: playlist for playlist in self.list_playlists(include_managed=True)
-            if is_managed_playlist(playlist.title, playlist.description)
-        }
+        existing_by_mood: dict[str, PlaylistSummary] = {}
+        for playlist in self.list_playlists(include_managed=True):
+            if not is_managed_playlist(playlist.title, playlist.description):
+                continue
+            mood = extract_managed_playlist_mood(playlist.title, playlist.description)
+            if mood and mood not in existing_by_mood:
+                existing_by_mood[mood] = playlist
         result: dict[str, PlaylistSummary] = {}
         for mood in MOOD_LABELS:
             title = build_managed_playlist_title(scope, mood, source_playlist_title)
-            playlist = existing.get(title)
+            description = build_managed_playlist_description(scope, mood, source_playlist_title)
+            playlist = existing_by_mood.get(mood)
             if playlist is None:
                 response = self._execute_request(
                     lambda: youtube.playlists().insert(
@@ -216,11 +231,7 @@ class YouTubeService:
                         body={
                             "snippet": {
                                 "title": title,
-                                "description": build_managed_playlist_description(
-                                    scope,
-                                    mood,
-                                    source_playlist_title,
-                                ),
+                                "description": description,
                             },
                             "status": {"privacyStatus": "private"},
                         },
@@ -233,6 +244,32 @@ class YouTubeService:
                     description=response["snippet"].get("description", ""),
                     privacy_status=response["status"].get("privacyStatus", ""),
                     item_count=response.get("contentDetails", {}).get("itemCount", 0),
+                )
+            elif (
+                playlist.title != title
+                or playlist.description != description
+                or playlist.privacy_status != "private"
+            ):
+                response = self._execute_request(
+                    lambda: youtube.playlists().update(
+                        part="snippet,status",
+                        body={
+                            "id": playlist.playlist_id,
+                            "snippet": {
+                                "title": title,
+                                "description": description,
+                            },
+                            "status": {"privacyStatus": "private"},
+                        },
+                    ),
+                    f"updating managed playlist '{playlist.playlist_id}'",
+                )
+                playlist = PlaylistSummary(
+                    playlist_id=response["id"],
+                    title=response["snippet"]["title"],
+                    description=response["snippet"].get("description", ""),
+                    privacy_status=response["status"].get("privacyStatus", ""),
+                    item_count=response.get("contentDetails", {}).get("itemCount", playlist.item_count),
                 )
             result[mood] = playlist
         return result

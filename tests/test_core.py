@@ -24,6 +24,7 @@ from app.services.youtube import (
     YouTubeService,
     YouTubeSyncError,
     build_managed_playlist_title,
+    extract_managed_playlist_mood,
     is_managed_playlist,
 )
 
@@ -61,10 +62,27 @@ def make_http_error(status: int, reason: str, message: str) -> HttpError:
 
 def test_managed_playlist_detection_and_naming() -> None:
     title = build_managed_playlist_title(RunScope.ALL_PLAYLISTS, "Happy / Feel-good")
-    assert title == "Mood [All] - Happy / Feel-good"
-    assert is_managed_playlist(title, "plain description")
+    assert title == "Happy / Feel-good"
+    assert is_managed_playlist(title, "[yt-mood-organizer-managed] managed")
     assert is_managed_playlist("Custom playlist", "[yt-mood-organizer-managed] managed")
     assert not is_managed_playlist("Road trip", "normal playlist")
+
+
+def test_extract_managed_playlist_mood_supports_new_and_legacy_formats() -> None:
+    assert (
+        extract_managed_playlist_mood(
+            "Happy / Feel-good",
+            "[yt-mood-organizer-managed] Managed by YouTube Mood Playlist Organizer. Scope: All playlists. Mood: Happy / Feel-good.",
+        )
+        == "Happy / Feel-good"
+    )
+    assert (
+        extract_managed_playlist_mood(
+            "Mood [All] - Happy / Feel-good",
+            "legacy description",
+        )
+        == "Happy / Feel-good"
+    )
 
 
 def test_dedupe_candidates_keeps_source_context() -> None:
