@@ -1,6 +1,6 @@
 # YouTube Mood Playlist Organizer
 
-Local FastAPI app that signs into YouTube, classifies songs with Azure OpenAI, and syncs mood-based playlists back to your account.
+Local FastAPI app that signs into YouTube, classifies songs with Azure OpenAI, and syncs mood-based playlists back to your account. Songs can be assigned to multiple mood playlists when they fit more than one category.
 
 ## Requirements
 

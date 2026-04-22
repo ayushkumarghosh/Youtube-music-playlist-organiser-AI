@@ -8,7 +8,16 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterator
 
-from app.models import RunDetail, RunItemView, RunScope, RunStatus, RunSummary, SetupSettings
+from app.models import (
+    RunDetail,
+    RunItemView,
+    RunScope,
+    RunStatus,
+    RunSummary,
+    SetupSettings,
+    deserialize_mood_labels,
+    serialize_mood_labels,
+)
 
 
 SCHEMA_SQL = """
@@ -206,8 +215,8 @@ class Database:
                         item["description"],
                         json.dumps(item["source_playlists"]),
                         json.dumps(item["source_positions"]),
-                        item.get("suggested_mood"),
-                        item.get("final_mood"),
+                        serialize_mood_labels(item.get("suggested_moods", item.get("suggested_mood"))),
+                        serialize_mood_labels(item.get("final_moods", item.get("final_mood"))),
                         item["confidence"],
                         item["reason"],
                         int(item["is_music"]),
@@ -235,8 +244,8 @@ class Database:
                 description=row["description"],
                 source_playlists=json.loads(row["source_playlists_json"]),
                 source_positions=json.loads(row["source_positions_json"]),
-                suggested_mood=row["suggested_mood"],
-                final_mood=row["final_mood"],
+                suggested_moods=deserialize_mood_labels(row["suggested_mood"]),
+                final_moods=deserialize_mood_labels(row["final_mood"]),
                 confidence=row["confidence"],
                 reason=row["reason"],
                 is_music=bool(row["is_music"]),
@@ -260,7 +269,7 @@ class Database:
     def update_run_items(
         self,
         run_id: str,
-        final_moods: dict[str, str | None],
+        final_moods: dict[str, list[str]],
         overrides: set[str],
     ) -> None:
         with self.connect() as conn:
@@ -271,7 +280,7 @@ class Database:
                     SET final_mood = ?, override_applied = ?
                     WHERE run_id = ? AND video_id = ?
                     """,
-                    (final_mood, int(video_id in overrides), run_id, video_id),
+                    (serialize_mood_labels(final_mood), int(video_id in overrides), run_id, video_id),
                 )
 
     def update_run_status(

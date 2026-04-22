@@ -9,7 +9,7 @@ from hashlib import sha256
 import json
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.constants import MOOD_LABELS, PROMPT_VERSION
 
@@ -36,6 +36,38 @@ class MoodLabel(StrEnum):
     CHILL = "Chill / Relaxing"
     ENERGETIC = "Energetic / Hype"
     DARK = "Dark / Intense"
+
+
+def normalize_mood_labels(values: Any) -> list[MoodLabel]:
+    if values in (None, "", []):
+        return []
+    if isinstance(values, (MoodLabel, str)):
+        values = [values]
+    if not isinstance(values, (list, tuple, set)):
+        raise TypeError("Moods must be a mood label or a list of mood labels.")
+
+    normalized_values: set[str] = set()
+    for value in values:
+        if value in (None, ""):
+            continue
+        mood = value if isinstance(value, MoodLabel) else MoodLabel(str(value))
+        normalized_values.add(mood.value)
+
+    return [MoodLabel(label) for label in MOOD_LABELS if label in normalized_values]
+
+
+def serialize_mood_labels(values: Any) -> str:
+    return json.dumps([mood.value for mood in normalize_mood_labels(values)])
+
+
+def deserialize_mood_labels(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:
+        decoded = raw
+    return [mood.value for mood in normalize_mood_labels(decoded)]
 
 
 @dataclass(slots=True)
@@ -86,39 +118,75 @@ class MoodClassification(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     is_music: bool = Field(description="Whether the item appears to be a song/music track.")
-    mood: MoodLabel | None = Field(
-        default=None,
-        description="Best-fit mood when the item is music and there is enough metadata.",
+    moods: list[MoodLabel] = Field(
+        default_factory=list,
+        description="Strong-fit moods when the item is music and there is enough metadata.",
     )
     confidence: int = Field(ge=0, le=100)
     reason: str = Field(min_length=1, max_length=300)
     model_name: str = Field(default="")
     prompt_version: str = Field(default=PROMPT_VERSION)
 
-    @field_validator("mood")
+    @model_validator(mode="before")
     @classmethod
-    def validate_mood(cls, value: MoodLabel | None, info: Any) -> MoodLabel | None:
-        is_music = info.data.get("is_music")
-        if is_music and value is None:
-            raise ValueError("Music rows must have a mood.")
-        return value
+    def upgrade_legacy_mood_field(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "moods" not in data and "mood" in data:
+            legacy_mood = data.get("mood")
+            data = dict(data)
+            data["moods"] = [] if legacy_mood in (None, "") else [legacy_mood]
+        return data
+
+    @field_validator("moods", mode="before")
+    @classmethod
+    def normalize_moods(cls, value: Any) -> list[MoodLabel]:
+        return normalize_mood_labels(value)
+
+    @model_validator(mode="after")
+    def validate_moods(self) -> "MoodClassification":
+        if self.is_music and not self.moods:
+            raise ValueError("Music rows must have at least one mood.")
+        if not self.is_music and self.moods:
+            raise ValueError("Non-music rows must not include moods.")
+        return self
+
+    @property
+    def mood(self) -> MoodLabel | None:
+        return self.moods[0] if self.moods else None
 
 
 class MoodClassificationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     is_music: bool
-    mood: MoodLabel | None = None
+    moods: list[MoodLabel] = Field(default_factory=list)
     confidence: int = Field(ge=0, le=100)
     reason: str = Field(min_length=1, max_length=300)
 
-    @field_validator("mood")
+    @model_validator(mode="before")
     @classmethod
-    def validate_music_mood(cls, value: MoodLabel | None, info: Any) -> MoodLabel | None:
-        is_music = info.data.get("is_music")
-        if is_music and value is None:
-            raise ValueError("Music rows must include a mood.")
-        return value
+    def upgrade_legacy_mood_field(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "moods" not in data and "mood" in data:
+            legacy_mood = data.get("mood")
+            data = dict(data)
+            data["moods"] = [] if legacy_mood in (None, "") else [legacy_mood]
+        return data
+
+    @field_validator("moods", mode="before")
+    @classmethod
+    def normalize_moods(cls, value: Any) -> list[MoodLabel]:
+        return normalize_mood_labels(value)
+
+    @model_validator(mode="after")
+    def validate_music_moods(self) -> "MoodClassificationResponse":
+        if self.is_music and not self.moods:
+            raise ValueError("Music rows must include at least one mood.")
+        if not self.is_music and self.moods:
+            raise ValueError("Non-music rows must not include moods.")
+        return self
+
+    @property
+    def mood(self) -> MoodLabel | None:
+        return self.moods[0] if self.moods else None
 
 
 class BatchMoodClassificationItem(MoodClassificationResponse):
@@ -135,9 +203,18 @@ class BatchMoodClassificationResponse(BaseModel):
 
 class ApprovedAssignment(BaseModel):
     video_id: str
-    final_mood: MoodLabel | None
+    final_moods: list[MoodLabel] = Field(default_factory=list)
     source_scope: RunScope
     override_applied: bool = False
+
+    @field_validator("final_moods", mode="before")
+    @classmethod
+    def normalize_final_moods(cls, value: Any) -> list[MoodLabel]:
+        return normalize_mood_labels(value)
+
+    @property
+    def final_mood(self) -> MoodLabel | None:
+        return self.final_moods[0] if self.final_moods else None
 
 
 class SetupSettings(BaseModel):
@@ -174,13 +251,40 @@ class RunItemView(BaseModel):
     description: str
     source_playlists: list[str]
     source_positions: list[int]
-    suggested_mood: MoodLabel | None = None
-    final_mood: MoodLabel | None = None
+    suggested_moods: list[MoodLabel] = Field(default_factory=list)
+    final_moods: list[MoodLabel] = Field(default_factory=list)
     confidence: int
     reason: str
     is_music: bool
     default_included: bool
     override_applied: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_legacy_mood_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        upgraded = dict(data)
+        if "suggested_moods" not in upgraded and "suggested_mood" in upgraded:
+            legacy_suggested = upgraded.get("suggested_mood")
+            upgraded["suggested_moods"] = [] if legacy_suggested in (None, "") else [legacy_suggested]
+        if "final_moods" not in upgraded and "final_mood" in upgraded:
+            legacy_final = upgraded.get("final_mood")
+            upgraded["final_moods"] = [] if legacy_final in (None, "") else [legacy_final]
+        return upgraded
+
+    @field_validator("suggested_moods", "final_moods", mode="before")
+    @classmethod
+    def normalize_moods(cls, value: Any) -> list[MoodLabel]:
+        return normalize_mood_labels(value)
+
+    @property
+    def suggested_mood(self) -> MoodLabel | None:
+        return self.suggested_moods[0] if self.suggested_moods else None
+
+    @property
+    def final_mood(self) -> MoodLabel | None:
+        return self.final_moods[0] if self.final_moods else None
 
 
 class RunSummary(BaseModel):

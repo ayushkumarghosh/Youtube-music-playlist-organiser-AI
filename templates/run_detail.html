@@ -22,7 +22,7 @@
     <div class="toolbar">
       <div>
         <h2>Review assignments</h2>
-        <p class="hint">Use the search box to narrow the list. Setting a mood overrides the model result. Choosing Skip removes the song from sync.</p>
+        <p class="hint">Use the search box to narrow the list. Check every mood that fits. Leaving all boxes unchecked skips the song during sync.</p>
       </div>
       <input type="search" id="filter-input" placeholder="Search title, channel, or playlist..." oninput="filterRows()">
     </div>
@@ -35,10 +35,10 @@
             <tr>
               <th>Song</th>
               <th>Source</th>
-              <th>Model</th>
+              <th>Model moods</th>
               <th>Confidence</th>
               <th>Reason</th>
-              <th>Final mood</th>
+              <th>Final moods</th>
             </tr>
           </thead>
           <tbody>
@@ -56,16 +56,19 @@
                     <div>{{ source }}{% if item.source_positions|length > loop.index0 %} • #{{ item.source_positions[loop.index0] + 1 }}{% endif %}</div>
                   {% endfor %}
                 </td>
-                <td>{{ item.suggested_mood or "Not classified as music" }}</td>
+                <td>{{ item.suggested_moods|join(", ") or "Not classified as music" }}</td>
                 <td>{{ item.confidence }}</td>
                 <td>{{ item.reason }}</td>
                 <td>
-                  <select name="mood__{{ item.video_id }}">
-                    <option value="" {% if not item.final_mood %}selected{% endif %}>Skip</option>
+                  <input type="hidden" name="mood__{{ item.video_id }}" value="">
+                  <div class="mood-options">
                     {% for mood in mood_labels %}
-                      <option value="{{ mood }}" {% if item.final_mood == mood %}selected{% endif %}>{{ mood }}</option>
+                      <label class="mood-option">
+                        <input type="checkbox" name="mood__{{ item.video_id }}" value="{{ mood }}" {% if mood in item.final_moods %}checked{% endif %}>
+                        <span>{{ mood }}</span>
+                      </label>
                     {% endfor %}
-                  </select>
+                  </div>
                 </td>
               </tr>
             {% endfor %}

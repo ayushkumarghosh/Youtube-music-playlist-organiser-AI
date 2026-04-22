@@ -85,7 +85,7 @@ label span {
   margin-bottom: 6px;
 }
 
-input,
+input:not([type="checkbox"]):not([type="radio"]),
 select,
 button,
 .secondary-button {
@@ -94,11 +94,18 @@ button,
   font: inherit;
 }
 
-input,
+input:not([type="checkbox"]):not([type="radio"]),
 select {
   width: 100%;
   padding: 12px 14px;
   background: rgba(255, 255, 255, 0.85);
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+  margin: 0;
+  padding: 0;
 }
 
 button,
@@ -204,6 +211,25 @@ button[disabled] {
   border-bottom: 1px solid var(--border);
   vertical-align: top;
   text-align: left;
+}
+
+.mood-options {
+  display: grid;
+  gap: 8px;
+}
+
+.mood-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.mood-option span {
+  margin: 0;
 }
 
 @media (max-width: 720px) {

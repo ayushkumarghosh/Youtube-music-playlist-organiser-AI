@@ -8,13 +8,13 @@ import uuid
 
 from app.db import Database
 from app.models import (
-    ApprovedAssignment,
     RunDetail,
     RunItemView,
     RunScope,
     RunStatus,
     RunSummary,
     SongCandidate,
+    normalize_mood_labels,
     utc_now,
 )
 from app.services.azure_openai import AzureOpenAIClassifier
@@ -71,7 +71,7 @@ class OrganizerService:
         items: list[RunItemView] = []
         for candidate in candidates:
             classification = classifications[candidate.video_id]
-            default_included = bool(classification.is_music and classification.mood)
+            default_included = bool(classification.is_music and classification.moods)
             items.append(
                 RunItemView(
                     video_id=candidate.video_id,
@@ -80,8 +80,8 @@ class OrganizerService:
                     description=candidate.description,
                     source_playlists=candidate.source_playlists,
                     source_positions=candidate.source_positions,
-                    suggested_mood=classification.mood,
-                    final_mood=classification.mood,
+                    suggested_moods=classification.moods,
+                    final_moods=classification.moods,
                     confidence=classification.confidence,
                     reason=classification.reason,
                     is_music=classification.is_music,
@@ -126,30 +126,23 @@ class OrganizerService:
     def apply_run(
         self,
         run_id: str,
-        overrides: dict[str, str],
+        overrides: dict[str, list[str]],
     ) -> dict[str, object]:
         run = self.db.get_run(run_id)
         if run is None:
             raise ValueError("Run not found.")
 
-        final_moods: dict[str, str | None] = {}
+        final_moods: dict[str, list[str]] = {}
         override_ids: set[str] = set()
-        assignments: list[ApprovedAssignment] = []
         for item in run.items:
-            override_supplied = item.video_id in overrides
-            selected_value = overrides.get(item.video_id, item.final_mood or "")
-            final_mood = selected_value or None
-            if final_mood != item.final_mood:
-                override_ids.add(item.video_id)
-            final_moods[item.video_id] = final_mood or None
-            assignments.append(
-                ApprovedAssignment(
-                    video_id=item.video_id,
-                    final_mood=final_mood or None,
-                    source_scope=run.scope,
-                    override_applied=(item.video_id in override_ids) if override_supplied else False,
-                )
+            selected_moods = normalize_mood_labels(
+                overrides.get(item.video_id, [mood.value for mood in item.final_moods])
             )
+            selected_values = [mood.value for mood in selected_moods]
+            current_values = [mood.value for mood in item.final_moods]
+            if selected_values != current_values:
+                override_ids.add(item.video_id)
+            final_moods[item.video_id] = selected_values
         self.db.update_run_items(run_id, final_moods, override_ids)
 
         grouped_video_ids: dict[str, list[tuple[list[str], list[int], str]]] = defaultdict(list)
@@ -157,11 +150,12 @@ class OrganizerService:
         if updated_run is None:
             raise RuntimeError("Updated run not found.")
         for item in updated_run.items:
-            if not item.final_mood:
+            if not item.final_moods:
                 continue
-            grouped_video_ids[str(item.final_mood)].append(
-                (item.source_playlists, item.source_positions, item.video_id)
-            )
+            for mood in item.final_moods:
+                grouped_video_ids[mood.value].append(
+                    (item.source_playlists, item.source_positions, item.video_id)
+                )
 
         managed_playlists = self.youtube_service.ensure_managed_playlists(
             updated_run.scope,

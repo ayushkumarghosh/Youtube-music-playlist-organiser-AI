@@ -120,7 +120,7 @@ def test_schema_contract_rejects_invalid_mood() -> None:
             {
                 "video_id": "v1",
                 "is_music": True,
-                "mood": "Unclear",
+                "moods": ["Unclear"],
                 "confidence": 50,
                 "reason": "bad mood",
             }
@@ -135,7 +135,7 @@ def test_schema_contract_rejects_extra_fields() -> None:
                     {
                         "video_id": "v1",
                         "is_music": True,
-                        "mood": MoodLabel.HAPPY,
+                        "moods": [MoodLabel.HAPPY],
                         "confidence": 50,
                         "reason": "valid",
                         "extra_field": "nope",
@@ -187,7 +187,7 @@ def test_classifier_uses_cache(tmp_path: Path) -> None:
                 BatchMoodClassificationItem(
                     video_id=batch_candidates[0].video_id,
                     is_music=True,
-                    mood=MoodLabel.HAPPY,
+                    moods=[MoodLabel.HAPPY],
                     confidence=88,
                     reason="Upbeat title and artist context.",
                 )
@@ -197,8 +197,8 @@ def test_classifier_uses_cache(tmp_path: Path) -> None:
     classifier._request_batch_response = fake_request  # type: ignore[method-assign]
     first = asyncio.run(classifier.classify_candidates([candidate]))
     second = asyncio.run(classifier.classify_candidates([candidate]))
-    assert first[candidate.video_id].mood == MoodLabel.HAPPY
-    assert second[candidate.video_id].mood == MoodLabel.HAPPY
+    assert first[candidate.video_id].moods == [MoodLabel.HAPPY]
+    assert second[candidate.video_id].moods == [MoodLabel.HAPPY]
     assert calls["count"] == 1
 
 
@@ -277,7 +277,7 @@ def test_cached_songs_are_excluded_from_batch_request_but_returned(tmp_path: Pat
 
     cached_classification = MoodClassification(
         is_music=True,
-        mood=MoodLabel.CHILL,
+        moods=[MoodLabel.CHILL],
         confidence=77,
         reason="Cached result",
         model_name="gpt-5.4",
@@ -300,7 +300,7 @@ def test_cached_songs_are_excluded_from_batch_request_but_returned(tmp_path: Pat
         return {
             candidate.video_id: MoodClassification(
                 is_music=True,
-                mood=MoodLabel.HAPPY,
+                moods=[MoodLabel.HAPPY],
                 confidence=90,
                 reason="Fresh result",
                 model_name="gpt-5.4",
@@ -334,21 +334,21 @@ def test_validate_batch_response_rejects_missing_duplicate_and_extra_ids(tmp_pat
             BatchMoodClassificationItem(
                 video_id=candidates[0].video_id,
                 is_music=True,
-                mood=MoodLabel.HAPPY,
+                moods=[MoodLabel.HAPPY],
                 confidence=80,
                 reason="ok",
             ),
             BatchMoodClassificationItem(
                 video_id="extra-id",
                 is_music=False,
-                mood=None,
+                moods=[],
                 confidence=15,
                 reason="extra",
             ),
             BatchMoodClassificationItem(
                 video_id=candidates[0].video_id,
                 is_music=True,
-                mood=MoodLabel.CHILL,
+                moods=[MoodLabel.CHILL],
                 confidence=60,
                 reason="dup",
             ),
@@ -381,7 +381,7 @@ def test_split_on_failure_recovers_by_recursing_into_smaller_batches(tmp_path: P
                 BatchMoodClassificationItem(
                     video_id=candidate.video_id,
                     is_music=True,
-                    mood=MoodLabel.HAPPY,
+                    moods=[MoodLabel.HAPPY],
                     confidence=90,
                     reason="single fallback",
                 )
@@ -500,17 +500,22 @@ class FakeClassifier:
             "v1": type(
                 "Classification",
                 (),
-                {"is_music": True, "mood": MoodLabel.CHILL, "confidence": 82, "reason": "Soft vibe"},
+                {
+                    "is_music": True,
+                    "moods": [MoodLabel.HAPPY, MoodLabel.CHILL],
+                    "confidence": 82,
+                    "reason": "Soft vibe",
+                },
             )(),
             "v2": type(
                 "Classification",
                 (),
-                {"is_music": False, "mood": None, "confidence": 25, "reason": "Looks like a podcast clip"},
+                {"is_music": False, "moods": [], "confidence": 25, "reason": "Looks like a podcast clip"},
             )(),
             "v3": type(
                 "Classification",
                 (),
-                {"is_music": True, "mood": MoodLabel.ENERGETIC, "confidence": 91, "reason": "Gym energy"},
+                {"is_music": True, "moods": [MoodLabel.ENERGETIC], "confidence": 91, "reason": "Gym energy"},
             )(),
         }
 
@@ -521,6 +526,8 @@ def test_preview_all_playlists_and_non_music_exclusion(tmp_path: Path) -> None:
     run = organizer.create_preview(RunScope.ALL_PLAYLISTS)
     assert run.summary.total_candidates == 3
     assert run.summary.default_included_count == 2
+    included_item = next(item for item in run.items if item.video_id == "v1")
+    assert included_item.suggested_moods == [MoodLabel.HAPPY, MoodLabel.CHILL]
     excluded = {item.video_id for item in run.items if not item.default_included}
     assert excluded == {"v2"}
 
@@ -534,12 +541,11 @@ def test_preview_single_playlist_and_apply_override(tmp_path: Path) -> None:
     summary = organizer.apply_run(
         run.run_id,
         {
-            "v1": "",
-            "v2": "Happy / Feel-good",
+            "v2": ["Happy / Feel-good"],
         },
     )
-    assert summary["total_assignments"] == 1
+    assert summary["total_assignments"] == 3
     happy_playlist = "managed-Happy / Feel-good"
     chill_playlist = "managed-Chill / Relaxing"
-    assert youtube.reconciled[happy_playlist] == ["v2"]
-    assert youtube.reconciled[chill_playlist] == []
+    assert youtube.reconciled[happy_playlist] == ["v1", "v2"]
+    assert youtube.reconciled[chill_playlist] == ["v1"]

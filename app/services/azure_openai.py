@@ -37,15 +37,16 @@ Use only the metadata provided.
 Return JSON that matches the schema exactly.
 Keep the response compact and valid JSON only.
 Rules:
-- If the item does not look like music/song content, set is_music to false and mood to null.
+- If the item does not look like music/song content, set is_music to false and moods to [].
 - If the metadata is too weak or ambiguous, set is_music to false and explain why.
-- When it is music, choose exactly one mood:
+- When it is music, return a moods array with one or more strong-fit moods:
   1. Happy / Feel-good
   2. Sad / Emotional
   3. Romantic / Love
   4. Chill / Relaxing
   5. Energetic / Hype
   6. Dark / Intense
+- Keep moods selective. Only include categories clearly supported by the metadata.
 - Confidence must be an integer from 0 to 100.
 - reason must be concise, grounded in the metadata, and preferably under 12 words.
 - Return exactly one result item for every input song.
@@ -300,7 +301,7 @@ class AzureOpenAIClassifier:
             response_item = items_by_id[candidate.video_id]
             classification = MoodClassification(
                 is_music=response_item.is_music,
-                mood=response_item.mood,
+                moods=response_item.moods,
                 confidence=response_item.confidence,
                 reason=response_item.reason,
                 model_name=self.settings.azure_openai_deployment,

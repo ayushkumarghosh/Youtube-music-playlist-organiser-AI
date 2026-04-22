@@ -236,11 +236,12 @@ async def apply_run(request: Request):
     run_id = str(form.get("run_id", "")).strip()
     if not run_id:
         raise HTTPException(status_code=400, detail="run_id is required.")
-    overrides = {
-        key.replace("mood__", "", 1): str(value)
-        for key, value in form.items()
-        if key.startswith("mood__")
-    }
+    overrides: dict[str, list[str]] = {}
+    for key, value in form.multi_items():
+        if not key.startswith("mood__"):
+            continue
+        video_id = key.replace("mood__", "", 1)
+        overrides.setdefault(video_id, []).append(str(value).strip())
     settings = settings_service.get_settings()
     youtube_service = YouTubeService(settings, db)
     classifier = AzureOpenAIClassifier(settings, db)
