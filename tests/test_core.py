@@ -443,6 +443,53 @@ def test_youtube_request_raises_sync_error_for_non_retryable_http_error(tmp_path
         service._execute_request(FakeRequest, "adding a test video")
 
 
+def test_reconcile_playlist_only_appends_missing_videos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db = build_temp_db(tmp_path)
+    service = YouTubeService(
+        SetupSettings(
+            azure_openai_endpoint="https://example.openai.azure.com",
+            azure_openai_api_key="secret",
+            azure_openai_deployment="gpt-5.4",
+            google_client_secrets_file="client.json",
+            session_secret="secret",
+        ),
+        db,
+    )
+    inserted_video_ids: list[str] = []
+
+    class FakeRequest:
+        def __init__(self, video_id: str) -> None:
+            self.video_id = video_id
+
+        def execute(self):
+            inserted_video_ids.append(self.video_id)
+            return {"id": f"playlist-item-{self.video_id}"}
+
+    class FakePlaylistItems:
+        def insert(self, part: str, body: dict[str, object]):
+            video_id = str(body["snippet"]["resourceId"]["videoId"])  # type: ignore[index]
+            return FakeRequest(video_id)
+
+    class FakeYouTubeClient:
+        def playlistItems(self):
+            return FakePlaylistItems()
+
+    monkeypatch.setattr(service, "_client", lambda: FakeYouTubeClient())
+    monkeypatch.setattr(
+        service,
+        "_fetch_playlist_records",
+        lambda youtube, playlist_id: [
+            {"playlist_item_id": "existing-v1", "video_id": "v1", "position": 0},
+            {"playlist_item_id": "legacy-track", "video_id": "legacy", "position": 1},
+        ],
+    )
+
+    counts = service.reconcile_playlist("managed-happy", ["v1", "v2", "v2", "v3"])
+
+    assert counts == {"deletes": 0, "inserts": 2, "updates": 0}
+    assert inserted_video_ids == ["v2", "v3"]
+
+
 class FakeYouTubeService:
     def __init__(self) -> None:
         self.playlists = [

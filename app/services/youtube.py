@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 import json
 import logging
 import time
@@ -281,26 +280,12 @@ class YouTubeService:
     ) -> dict[str, int]:
         youtube = self._client()
         existing_records = self._fetch_playlist_records(youtube, playlist_id)
+        existing_video_ids = {record["video_id"] for record in existing_records}
+        desired_unique_video_ids = list(dict.fromkeys(desired_video_ids))
 
-        deletes = 0
         inserts = 0
-        updates = 0
-
-        desired_counter = Counter(desired_video_ids)
-        seen_counter: Counter[str] = Counter()
-        for record in existing_records:
-            seen_counter[record["video_id"]] += 1
-            if desired_counter[record["video_id"]] < seen_counter[record["video_id"]]:
-                self._execute_request(
-                    lambda: youtube.playlistItems().delete(id=record["playlist_item_id"]),
-                    f"removing video {record['video_id']} from playlist {playlist_id}",
-                )
-                deletes += 1
-
-        refreshed_records = self._fetch_playlist_records(youtube, playlist_id)
-        existing_map = {record["video_id"]: record for record in refreshed_records}
-        for video_id in desired_video_ids:
-            if video_id in existing_map:
+        for video_id in desired_unique_video_ids:
+            if video_id in existing_video_ids:
                 continue
             self._execute_request(
                 lambda: youtube.playlistItems().insert(
@@ -312,32 +297,11 @@ class YouTubeService:
                         }
                     },
                 ),
-                f"adding video {video_id} to playlist {playlist_id}",
+                f"appending video {video_id} to playlist {playlist_id}",
             )
             inserts += 1
 
-        refreshed_records = self._fetch_playlist_records(youtube, playlist_id)
-        for position, video_id in enumerate(desired_video_ids):
-            record = next((row for row in refreshed_records if row["video_id"] == video_id), None)
-            if record is None or record["position"] == position:
-                continue
-            self._execute_request(
-                lambda: youtube.playlistItems().update(
-                    part="snippet",
-                    body={
-                        "id": record["playlist_item_id"],
-                        "snippet": {
-                            "playlistId": playlist_id,
-                            "resourceId": {"kind": "youtube#video", "videoId": video_id},
-                            "position": position,
-                        },
-                    },
-                ),
-                f"reordering video {video_id} in playlist {playlist_id}",
-            )
-            updates += 1
-
-        return {"deletes": deletes, "inserts": inserts, "updates": updates}
+        return {"deletes": 0, "inserts": inserts, "updates": 0}
 
     def _fetch_playlist_records(self, youtube: Any, playlist_id: str) -> list[dict[str, Any]]:
         items = []
