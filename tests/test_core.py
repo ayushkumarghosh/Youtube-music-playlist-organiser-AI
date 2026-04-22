@@ -573,6 +573,7 @@ def test_preview_all_playlists_and_non_music_exclusion(tmp_path: Path) -> None:
     run = organizer.create_preview(RunScope.ALL_PLAYLISTS)
     assert run.summary.total_candidates == 3
     assert run.summary.default_included_count == 2
+    assert [item.video_id for item in run.items] == ["v2", "v1", "v3"]
     included_item = next(item for item in run.items if item.video_id == "v1")
     assert included_item.suggested_moods == [MoodLabel.HAPPY, MoodLabel.CHILL]
     excluded = {item.video_id for item in run.items if not item.default_included}

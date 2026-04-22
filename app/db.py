@@ -233,7 +233,7 @@ class Database:
             if not run_row:
                 return None
             item_rows = conn.execute(
-                "SELECT * FROM run_items WHERE run_id = ? ORDER BY LOWER(title), video_id",
+                "SELECT * FROM run_items WHERE run_id = ? ORDER BY confidence ASC, LOWER(title), video_id",
                 (run_id,),
             ).fetchall()
         items = [

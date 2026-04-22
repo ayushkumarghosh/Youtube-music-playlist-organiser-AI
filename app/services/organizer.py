@@ -92,9 +92,9 @@ class OrganizerService:
 
         items.sort(
             key=lambda item: (
-                [playlist.lower() for playlist in item.source_playlists],
-                item.source_positions,
+                item.confidence,
                 item.title.lower(),
+                item.video_id,
             )
         )
         summary = RunSummary(
