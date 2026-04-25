@@ -11,11 +11,30 @@ from app.services.azure_openai import AzureClassificationError
 from app.services.youtube import YouTubeSyncError
 
 
+GOOGLE_CLIENT_SECRETS_JSON = '{"web":{"client_id":"client-id","client_secret":"client-secret","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token"}}'
+
+
 def test_home_renders() -> None:
     client = TestClient(app)
     response = client.get("/")
     assert response.status_code == 200
     assert "YouTube Mood Playlist Organizer" in response.text
+
+
+def test_home_does_not_render_credential_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "secret")
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.4")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRETS_JSON", GOOGLE_CLIENT_SECRETS_JSON)
+    monkeypatch.setenv("SESSION_SECRET", "session-secret")
+
+    client = TestClient(app)
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'name="azure_openai_api_key"' not in response.text
+    assert 'name="google_client_secrets_json"' not in response.text
+    assert 'action="/settings/save"' not in response.text
 
 
 def test_preview_classification_error_redirects(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -25,12 +44,12 @@ def test_preview_classification_error_redirects(monkeypatch: pytest.MonkeyPatch)
                 azure_openai_endpoint="https://example.openai.azure.com",
                 azure_openai_api_key="secret",
                 azure_openai_deployment="gpt-5.4",
-                google_client_secrets_file="client.json",
+                google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
                 session_secret="secret",
             )
 
     class FakeYouTubeService:
-        def __init__(self, settings, db):
+        def __init__(self, settings, db, token_payload=None):
             pass
 
         def has_token(self):
@@ -40,7 +59,7 @@ def test_preview_classification_error_redirects(monkeypatch: pytest.MonkeyPatch)
         def __init__(self, db, youtube_service, classifier):
             pass
 
-        def create_preview(self, scope, source_playlist_id=None):
+        def create_preview(self, scope, source_playlist_id=None, persist=True):
             raise AzureClassificationError("mock classification failure")
 
     monkeypatch.setattr("app.main.settings_service", FakeSettingsService())
@@ -64,12 +83,12 @@ def test_apply_sync_error_redirects(monkeypatch: pytest.MonkeyPatch) -> None:
                 azure_openai_endpoint="https://example.openai.azure.com",
                 azure_openai_api_key="secret",
                 azure_openai_deployment="gpt-5.4",
-                google_client_secrets_file="client.json",
+                google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
                 session_secret="secret",
             )
 
     class FakeYouTubeService:
-        def __init__(self, settings, db):
+        def __init__(self, settings, db, token_payload=None):
             pass
 
     class FakeOrganizerService:
@@ -90,4 +109,4 @@ def test_apply_sync_error_redirects(monkeypatch: pytest.MonkeyPatch) -> None:
         follow_redirects=False,
     )
     assert response.status_code == 303
-    assert response.headers["location"] == "/runs/run-123"
+    assert response.headers["location"] == "/"

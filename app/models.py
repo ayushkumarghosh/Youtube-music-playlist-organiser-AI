@@ -221,16 +221,18 @@ class SetupSettings(BaseModel):
     azure_openai_endpoint: str = ""
     azure_openai_api_key: str = ""
     azure_openai_deployment: str = ""
-    google_client_secrets_file: str = ""
+    google_client_secrets_json: str = ""
     session_secret: str = ""
+    app_base_url: str = ""
 
     def masked(self) -> "SetupSettings":
         return SetupSettings(
             azure_openai_endpoint=self.azure_openai_endpoint,
             azure_openai_api_key="********" if self.azure_openai_api_key else "",
             azure_openai_deployment=self.azure_openai_deployment,
-            google_client_secrets_file=self.google_client_secrets_file,
+            google_client_secrets_json="********" if self.google_client_secrets_json else "",
             session_secret="********" if self.session_secret else "",
+            app_base_url=self.app_base_url,
         )
 
     def is_complete(self) -> bool:
@@ -239,7 +241,8 @@ class SetupSettings(BaseModel):
                 self.azure_openai_endpoint.strip(),
                 self.azure_openai_api_key.strip(),
                 self.azure_openai_deployment.strip(),
-                self.google_client_secrets_file.strip(),
+                self.google_client_secrets_json.strip(),
+                self.session_secret.strip(),
             ]
         )
 

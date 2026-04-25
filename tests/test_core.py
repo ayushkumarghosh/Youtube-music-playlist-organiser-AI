@@ -18,6 +18,8 @@ from app.models import (
     SetupSettings,
     SongCandidate,
 )
+from app.security import EncryptedStateError, decrypt_json, encrypt_json
+from app.services.settings import SettingsService
 from app.services.azure_openai import AzureClassificationError, AzureOpenAIClassifier, build_cache_key
 from app.services.organizer import OrganizerService, dedupe_candidates
 from app.services.youtube import (
@@ -29,10 +31,74 @@ from app.services.youtube import (
 )
 
 
+GOOGLE_CLIENT_SECRETS_JSON = '{"web":{"client_id":"client-id","client_secret":"client-secret","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token"}}'
+
+
 def build_temp_db(tmp_path: Path) -> Database:
     db = Database(tmp_path / "test.db")
     db.initialize()
     return db
+
+
+def test_settings_are_loaded_from_env_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db = build_temp_db(tmp_path)
+    db.save_settings(
+        SetupSettings(
+            azure_openai_endpoint="https://stored.openai.azure.com",
+            azure_openai_api_key="stored",
+            azure_openai_deployment="stored",
+            google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
+            session_secret="stored",
+        )
+    )
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://env.openai.azure.com")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "env-key")
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "env-deployment")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRETS_JSON", GOOGLE_CLIENT_SECRETS_JSON)
+    monkeypatch.setenv("SESSION_SECRET", "env-secret")
+
+    settings = SettingsService(db).get_settings()
+
+    assert settings.azure_openai_endpoint == "https://env.openai.azure.com"
+    assert settings.azure_openai_api_key == "env-key"
+    assert settings.azure_openai_deployment == "env-deployment"
+    assert settings.session_secret == "env-secret"
+
+
+def test_settings_validation_reports_missing_and_invalid_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db = build_temp_db(tmp_path)
+    for key in [
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_DEPLOYMENT",
+        "GOOGLE_CLIENT_SECRETS_JSON",
+        "SESSION_SECRET",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    errors = SettingsService(db).validate()
+    assert "AZURE_OPENAI_ENDPOINT is required." in errors
+    assert "GOOGLE_CLIENT_SECRETS_JSON is required." in errors
+
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://env.openai.azure.com")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "env-key")
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "env-deployment")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRETS_JSON", "{")
+    monkeypatch.setenv("SESSION_SECRET", "env-secret")
+
+    assert SettingsService(db).validate() == ["GOOGLE_CLIENT_SECRETS_JSON must be valid JSON."]
+
+
+def test_encrypted_browser_state_round_trip_and_rejects_invalid_token() -> None:
+    token = encrypt_json({"token": "abc", "nested": {"ok": True}}, "session-secret")
+
+    assert decrypt_json(token, "session-secret") == {"token": "abc", "nested": {"ok": True}}
+
+    with pytest.raises(EncryptedStateError):
+        decrypt_json(token, "wrong-secret")
+
+    with pytest.raises(EncryptedStateError):
+        decrypt_json("not-a-fernet-token", "session-secret")
 
 
 def make_candidate(index: int, *, description: str = "desc") -> SongCandidate:
@@ -173,7 +239,7 @@ def test_classifier_uses_cache(tmp_path: Path) -> None:
         azure_openai_endpoint="https://example.openai.azure.com",
         azure_openai_api_key="secret",
         azure_openai_deployment="gpt-5.4",
-        google_client_secrets_file="client.json",
+        google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
         session_secret="secret",
     )
     classifier = AzureOpenAIClassifier(settings, db)
@@ -209,7 +275,7 @@ def test_batch_packer_keeps_1200_songs_together(tmp_path: Path) -> None:
             azure_openai_endpoint="https://example.openai.azure.com",
             azure_openai_api_key="secret",
             azure_openai_deployment="gpt-5.4",
-            google_client_secrets_file="client.json",
+            google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
             session_secret="secret",
         ),
         db,
@@ -226,7 +292,7 @@ def test_batch_packer_splits_large_inputs_and_keeps_remainder(tmp_path: Path) ->
             azure_openai_endpoint="https://example.openai.azure.com",
             azure_openai_api_key="secret",
             azure_openai_deployment="gpt-5.4",
-            google_client_secrets_file="client.json",
+            google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
             session_secret="secret",
         ),
         db,
@@ -245,7 +311,7 @@ def test_batch_request_kwargs_use_canonical_responses_shape(tmp_path: Path) -> N
             azure_openai_endpoint="https://example.openai.azure.com",
             azure_openai_api_key="secret",
             azure_openai_deployment="gpt-5.4",
-            google_client_secrets_file="client.json",
+            google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
             session_secret="secret",
         ),
         db,
@@ -269,7 +335,7 @@ def test_cached_songs_are_excluded_from_batch_request_but_returned(tmp_path: Pat
         azure_openai_endpoint="https://example.openai.azure.com",
         azure_openai_api_key="secret",
         azure_openai_deployment="gpt-5.4",
-        google_client_secrets_file="client.json",
+        google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
         session_secret="secret",
     )
     classifier = AzureOpenAIClassifier(settings, db)
@@ -323,7 +389,7 @@ def test_validate_batch_response_rejects_missing_duplicate_and_extra_ids(tmp_pat
             azure_openai_endpoint="https://example.openai.azure.com",
             azure_openai_api_key="secret",
             azure_openai_deployment="gpt-5.4",
-            google_client_secrets_file="client.json",
+            google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
             session_secret="secret",
         ),
         db,
@@ -364,7 +430,7 @@ def test_split_on_failure_recovers_by_recursing_into_smaller_batches(tmp_path: P
         azure_openai_endpoint="https://example.openai.azure.com",
         azure_openai_api_key="secret",
         azure_openai_deployment="gpt-5.4",
-        google_client_secrets_file="client.json",
+        google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
         session_secret="secret",
     )
     classifier = AzureOpenAIClassifier(settings, db)
@@ -401,7 +467,7 @@ def test_youtube_request_retries_transient_http_errors(tmp_path: Path, monkeypat
             azure_openai_endpoint="https://example.openai.azure.com",
             azure_openai_api_key="secret",
             azure_openai_deployment="gpt-5.4",
-            google_client_secrets_file="client.json",
+            google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
             session_secret="secret",
         ),
         db,
@@ -429,7 +495,7 @@ def test_youtube_request_raises_sync_error_for_non_retryable_http_error(tmp_path
             azure_openai_endpoint="https://example.openai.azure.com",
             azure_openai_api_key="secret",
             azure_openai_deployment="gpt-5.4",
-            google_client_secrets_file="client.json",
+            google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
             session_secret="secret",
         ),
         db,
@@ -450,7 +516,7 @@ def test_reconcile_playlist_only_appends_missing_videos(tmp_path: Path, monkeypa
             azure_openai_endpoint="https://example.openai.azure.com",
             azure_openai_api_key="secret",
             azure_openai_deployment="gpt-5.4",
-            google_client_secrets_file="client.json",
+            google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
             session_secret="secret",
         ),
         db,

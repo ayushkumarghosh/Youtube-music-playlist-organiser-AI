@@ -150,6 +150,23 @@ button[disabled] {
   padding-left: 18px;
 }
 
+.status-list {
+  display: grid;
+  gap: 10px;
+}
+
+.status-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.status-row:last-child {
+  border-bottom: 0;
+}
+
 .playlist-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

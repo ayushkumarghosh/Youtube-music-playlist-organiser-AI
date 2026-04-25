@@ -7,3 +7,5 @@ data/
 *.db
 *.sqlite3
 secrets
+.env
+.env.local

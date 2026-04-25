@@ -14,30 +14,29 @@
   <section class="grid">
     <div class="panel">
       <h2>1. Setup</h2>
-      <form action="/settings/save" method="post" class="stack">
-        <label>
+      <div class="status-list">
+        <div class="status-row">
           <span>Azure OpenAI endpoint</span>
-          <input type="text" name="azure_openai_endpoint" value="{{ settings.azure_openai_endpoint }}" placeholder="https://your-resource.openai.azure.com">
-        </label>
-        <label>
+          <strong>{% if settings.azure_openai_endpoint %}Configured{% else %}Missing{% endif %}</strong>
+        </div>
+        <div class="status-row">
           <span>Azure OpenAI API key</span>
-          <input type="password" name="azure_openai_api_key" value="" placeholder="Paste your API key">
-        </label>
-        <label>
+          <strong>{% if settings.azure_openai_api_key %}Configured{% else %}Missing{% endif %}</strong>
+        </div>
+        <div class="status-row">
           <span>Azure OpenAI deployment</span>
-          <input type="text" name="azure_openai_deployment" value="{{ settings.azure_openai_deployment }}" placeholder="gpt-5.4 deployment name">
-        </label>
-        <label>
-          <span>Google client secrets file</span>
-          <input type="text" name="google_client_secrets_file" value="{{ settings.google_client_secrets_file }}" placeholder="C:\path\to\client_secret.json">
-        </label>
-        <label>
+          <strong>{% if settings.azure_openai_deployment %}Configured{% else %}Missing{% endif %}</strong>
+        </div>
+        <div class="status-row">
+          <span>Google OAuth client JSON</span>
+          <strong>{% if settings.google_client_secrets_json %}Configured{% else %}Missing{% endif %}</strong>
+        </div>
+        <div class="status-row">
           <span>Session secret</span>
-          <input type="text" name="session_secret_value" value="" placeholder="Optional. Leave blank to keep current value.">
-        </label>
-        <button type="submit">Save setup</button>
-      </form>
-      <p class="hint">Saving runs a live Azure OpenAI probe and stores your Azure settings plus the Google OAuth file path in SQLite.</p>
+          <strong>{% if settings.session_secret %}Configured{% else %}Missing{% endif %}</strong>
+        </div>
+      </div>
+      <p class="hint">Credentials are loaded from environment variables only. Nothing secret is entered in this browser or stored in SQLite.</p>
     </div>
 
     <div class="panel">

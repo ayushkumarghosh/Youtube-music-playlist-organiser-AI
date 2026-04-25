@@ -65,16 +65,31 @@ def extract_managed_playlist_mood(title: str, description: str = "") -> str | No
 
 
 class YouTubeService:
-    def __init__(self, settings: SetupSettings, db: Database) -> None:
+    def __init__(
+        self,
+        settings: SetupSettings,
+        db: Database,
+        token_payload: dict[str, Any] | None = None,
+    ) -> None:
         self.settings = settings
         self.db = db
+        self.token_payload = token_payload
+
+    def _client_config(self) -> dict[str, Any]:
+        try:
+            config = json.loads(self.settings.google_client_secrets_json)
+        except json.JSONDecodeError as exc:
+            raise YouTubeAuthError("GOOGLE_CLIENT_SECRETS_JSON must be valid JSON.") from exc
+        if not isinstance(config, dict) or not any(key in config for key in ("web", "installed")):
+            raise YouTubeAuthError("GOOGLE_CLIENT_SECRETS_JSON must be a Google OAuth client JSON object.")
+        return config
 
     def has_token(self) -> bool:
-        return self.db.load_token_payload(GOOGLE_PROVIDER) is not None
+        return self.token_payload is not None
 
     def build_authorization_url(self, redirect_uri: str) -> tuple[str, str, str | None]:
-        flow = Flow.from_client_secrets_file(
-            self.settings.google_client_secrets_file,
+        flow = Flow.from_client_config(
+            self._client_config(),
             scopes=GOOGLE_SCOPES,
             autogenerate_code_verifier=True,
         )
@@ -92,9 +107,9 @@ class YouTubeService:
         state: str,
         redirect_uri: str,
         code_verifier: str | None = None,
-    ) -> None:
-        flow = Flow.from_client_secrets_file(
-            self.settings.google_client_secrets_file,
+    ) -> dict[str, Any]:
+        flow = Flow.from_client_config(
+            self._client_config(),
             scopes=GOOGLE_SCOPES,
             state=state,
             autogenerate_code_verifier=False,
@@ -103,23 +118,21 @@ class YouTubeService:
         flow.code_verifier = code_verifier
         flow.fetch_token(code=code)
         creds = flow.credentials
-        self.db.save_token_payload(
-            GOOGLE_PROVIDER,
-            {
-                "token": creds.token,
-                "refresh_token": creds.refresh_token,
-                "token_uri": creds.token_uri,
-                "client_id": creds.client_id,
-                "client_secret": creds.client_secret,
-                "scopes": creds.scopes,
-            },
-        )
+        payload = {
+            "token": creds.token,
+            "refresh_token": creds.refresh_token,
+            "token_uri": creds.token_uri,
+            "client_id": creds.client_id,
+            "client_secret": creds.client_secret,
+            "scopes": creds.scopes,
+        }
+        self.token_payload = payload
+        return payload
 
     def _credentials(self) -> Credentials:
-        payload = self.db.load_token_payload(GOOGLE_PROVIDER)
-        if not payload:
+        if not self.token_payload:
             raise YouTubeAuthError("YouTube is not connected.")
-        return Credentials.from_authorized_user_info(payload, GOOGLE_SCOPES)
+        return Credentials.from_authorized_user_info(self.token_payload, GOOGLE_SCOPES)
 
     def _client(self):
         return build("youtube", "v3", credentials=self._credentials(), cache_discovery=False)

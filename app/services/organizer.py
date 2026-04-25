@@ -58,6 +58,7 @@ class OrganizerService:
         self,
         scope: RunScope,
         source_playlist_id: str | None = None,
+        persist: bool = True,
     ) -> RunDetail:
         source_playlists = self.youtube_service.get_source_playlists(scope, source_playlist_id)
         playlist_items = []
@@ -105,6 +106,17 @@ class OrganizerService:
         )
         run_id = str(uuid.uuid4())
         source_title = source_playlists[0].title if scope == RunScope.SINGLE_PLAYLIST and source_playlists else None
+        if not persist:
+            return RunDetail(
+                run_id=run_id,
+                status=RunStatus.PREVIEWED,
+                scope=scope,
+                source_playlist_id=source_playlist_id,
+                source_playlist_title=source_title,
+                created_at=utc_now(),
+                summary=summary,
+                items=items,
+            )
         self.db.save_run(
             run_id=run_id,
             status=RunStatus.PREVIEWED,
@@ -188,4 +200,65 @@ class OrganizerService:
             sync_summary["total_assignments"] = int(sync_summary["total_assignments"]) + len(ordered_video_ids)
 
         self.db.update_run_status(run_id, RunStatus.APPLIED, sync_summary)
+        return sync_summary
+
+    def apply_run_detail(
+        self,
+        run: RunDetail,
+        overrides: dict[str, list[str]],
+    ) -> dict[str, object]:
+        updated_items: list[RunItemView] = []
+        for item in run.items:
+            selected_moods = normalize_mood_labels(
+                overrides.get(item.video_id, [mood.value for mood in item.final_moods])
+            )
+            selected_values = [mood.value for mood in selected_moods]
+            current_values = [mood.value for mood in item.final_moods]
+            updated_item = item.model_copy(
+                update={
+                    "final_moods": selected_moods,
+                    "override_applied": selected_values != current_values,
+                }
+            )
+            updated_items.append(updated_item)
+
+        grouped_video_ids: dict[str, list[tuple[list[str], list[int], str]]] = defaultdict(list)
+        for item in updated_items:
+            if not item.final_moods:
+                continue
+            for mood in item.final_moods:
+                grouped_video_ids[mood.value].append(
+                    (item.source_playlists, item.source_positions, item.video_id)
+                )
+
+        managed_playlists = self.youtube_service.ensure_managed_playlists(
+            run.scope,
+            run.source_playlist_title,
+        )
+
+        sync_summary: dict[str, object] = {"playlists": {}, "total_assignments": 0}
+        for mood, playlist in managed_playlists.items():
+            ordered_video_ids = [
+                video_id
+                for _, _, video_id in sorted(
+                    grouped_video_ids.get(mood, []),
+                    key=lambda row: (
+                        [name.lower() for name in row[0]],
+                        row[1],
+                        row[2],
+                    ),
+                )
+            ]
+            sync_counts = self.youtube_service.reconcile_playlist(
+                playlist.playlist_id,
+                ordered_video_ids,
+            )
+            sync_summary["playlists"][mood] = {
+                "playlist_id": playlist.playlist_id,
+                "title": playlist.title,
+                "video_count": len(ordered_video_ids),
+                "sync_counts": sync_counts,
+            }
+            sync_summary["total_assignments"] = int(sync_summary["total_assignments"]) + len(ordered_video_ids)
+
         return sync_summary
