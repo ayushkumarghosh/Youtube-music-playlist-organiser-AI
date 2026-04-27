@@ -9,3 +9,5 @@ data/
 secrets
 .env
 .env.local
+
+.vercel

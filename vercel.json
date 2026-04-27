@@ -5,11 +5,5 @@
       "src": "/(.*)",
       "dest": "/api/index.py"
     }
-  ],
-  "functions": {
-    "api/index.py": {
-      "includeFiles": "{templates/**,static/**}",
-      "excludeFiles": "{tests/**,.venv/**,data/**,secrets/**,.pytest_cache/**,**/*.pyc,__pycache__/**}"
-    }
-  }
+  ]
 }

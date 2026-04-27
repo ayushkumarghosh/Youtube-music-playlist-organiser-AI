@@ -35,10 +35,10 @@ class RuntimePaths:
 
 def settings_from_env() -> SetupSettings:
     return SetupSettings(
-        azure_openai_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT", ""),
-        azure_openai_api_key=os.getenv("AZURE_OPENAI_API_KEY", ""),
-        azure_openai_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT", ""),
-        google_client_secrets_json=os.getenv("GOOGLE_CLIENT_SECRETS_JSON", ""),
-        session_secret=os.getenv("SESSION_SECRET", SESSION_SECRET_DEFAULT),
-        app_base_url=os.getenv("APP_BASE_URL", ""),
+        azure_openai_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT", "").strip(),
+        azure_openai_api_key=os.getenv("AZURE_OPENAI_API_KEY", "").strip(),
+        azure_openai_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT", "").strip(),
+        google_client_secrets_json=os.getenv("GOOGLE_CLIENT_SECRETS_JSON", "").strip(),
+        session_secret=os.getenv("SESSION_SECRET", SESSION_SECRET_DEFAULT).strip(),
+        app_base_url=os.getenv("APP_BASE_URL", "").strip(),
     )
