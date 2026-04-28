@@ -1,14 +1,29 @@
 {% extends "base.html" %}
 {% block content %}
-  <section class="panel">
+  <section class="panel run-panel">
     <div class="run-summary">
       <div>
         <p class="eyebrow">Run {{ run.run_id }}</p>
-        <h2>Preview</h2>
-        <p>{{ run.summary.total_candidates }} songs reviewed, {{ run.summary.default_included_count }} included by default, {{ run.summary.excluded_count }} excluded by default.</p>
+        <h2>Preview ready</h2>
       </div>
       <div class="status-pill">{{ run.status.value }}</div>
     </div>
+
+    <div class="metric-grid">
+      <div class="metric">
+        <span>Total songs</span>
+        <strong>{{ run.summary.total_candidates }}</strong>
+      </div>
+      <div class="metric">
+        <span>Included</span>
+        <strong>{{ run.summary.default_included_count }}</strong>
+      </div>
+      <div class="metric">
+        <span>Excluded</span>
+        <strong>{{ run.summary.excluded_count }}</strong>
+      </div>
+    </div>
+
     <div class="run-meta">
       <span>Scope: {{ run.scope.value }}</span>
       {% if run.source_playlist_title %}
@@ -18,25 +33,35 @@
     </div>
   </section>
 
-  <section class="panel">
-    <div class="toolbar">
-      <div>
-        <h2>Review assignments</h2>
-        <p class="hint">Use the search box to narrow the list. Check every mood that fits. Leaving all boxes unchecked skips the song during sync.</p>
-      </div>
-      <input type="search" id="filter-input" placeholder="Search title, channel, or playlist..." oninput="filterRows()">
-    </div>
-
-    <form action="/runs/apply" method="post">
+  <section class="panel review-panel">
+    <form
+      action="/runs/apply"
+      method="post"
+      data-loading-title="Syncing to YouTube..."
+      data-loading-message="Creating or updating mood playlists and applying your reviewed assignments."
+    >
       <input type="hidden" name="run_id" value="{{ run.run_id }}">
       <input type="hidden" name="run_state" value="{{ run_state }}">
+
+      <div class="review-toolbar">
+        <div class="section-heading">
+          <h2>Review assignments</h2>
+          <p>Search, adjust mood chips, then sync the final set.</p>
+        </div>
+        <div class="toolbar-actions">
+          <input type="search" id="filter-input" placeholder="Search songs, artists, playlists" data-row-filter>
+          <a class="secondary-button" href="/preview">Back</a>
+          <button type="submit">Apply to YouTube</button>
+        </div>
+      </div>
+
       <div class="table-wrap">
         <table class="results-table">
           <thead>
             <tr>
               <th>Song</th>
               <th>Source</th>
-              <th>Model moods</th>
+              <th>Model</th>
               <th>Confidence</th>
               <th>Reason</th>
               <th>Final moods</th>
@@ -45,7 +70,7 @@
           <tbody>
             {% for item in run.items %}
               <tr data-filter="{{ (item.title ~ ' ' ~ item.channel_title ~ ' ' ~ item.source_playlists|join(' '))|lower }}">
-                <td>
+                <td class="song-cell">
                   <strong>{{ item.title }}</strong>
                   <div class="subtle">{{ item.channel_title }}</div>
                   {% if not item.is_music %}
@@ -54,12 +79,14 @@
                 </td>
                 <td>
                   {% for source in item.source_playlists %}
-                    <div>{{ source }}{% if item.source_positions|length > loop.index0 %} • #{{ item.source_positions[loop.index0] + 1 }}{% endif %}</div>
+                    <div>{{ source }}{% if item.source_positions|length > loop.index0 %} &middot; #{{ item.source_positions[loop.index0] + 1 }}{% endif %}</div>
                   {% endfor %}
                 </td>
                 <td>{{ item.suggested_moods|join(", ") or "Not classified as music" }}</td>
-                <td>{{ item.confidence }}</td>
-                <td>{{ item.reason }}</td>
+                <td>
+                  <span class="confidence">{{ item.confidence }}</span>
+                </td>
+                <td class="reason-cell">{{ item.reason }}</td>
                 <td>
                   <input type="hidden" name="mood__{{ item.video_id }}" value="">
                   <div class="mood-options">
@@ -76,21 +103,6 @@
           </tbody>
         </table>
       </div>
-      <div class="actions">
-        <a class="secondary-button" href="/">Back</a>
-        <button type="submit">Apply to YouTube</button>
-      </div>
     </form>
   </section>
-
-  <script>
-    function filterRows() {
-      const query = document.getElementById("filter-input").value.toLowerCase().trim();
-      const rows = document.querySelectorAll("tbody tr");
-      rows.forEach((row) => {
-        const haystack = row.dataset.filter || "";
-        row.style.display = haystack.includes(query) ? "" : "none";
-      });
-    }
-  </script>
 {% endblock %}

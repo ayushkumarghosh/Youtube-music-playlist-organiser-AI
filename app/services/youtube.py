@@ -45,7 +45,12 @@ def build_managed_playlist_title(scope: RunScope, mood: str, source_playlist_tit
 
 
 def build_managed_playlist_description(scope: RunScope, mood: str, source_playlist_title: str | None = None) -> str:
-    source_label = "All playlists" if scope == RunScope.ALL_PLAYLISTS else (source_playlist_title or "Selected playlist")
+    if scope == RunScope.ALL_PLAYLISTS:
+        source_label = "All playlists"
+    elif scope == RunScope.SELECTED_PLAYLISTS:
+        source_label = source_playlist_title or "Selected playlists"
+    else:
+        source_label = source_playlist_title or "Selected playlist"
     return (
         f"{APP_MANAGED_MARKER} Managed by YouTube Mood Playlist Organizer. "
         f"Scope: {source_label}. Mood: {mood}."
@@ -212,10 +217,14 @@ class YouTubeService:
         self,
         scope: RunScope,
         selected_playlist_id: str | None = None,
+        selected_playlist_ids: list[str] | None = None,
     ) -> list[PlaylistSummary]:
         playlists = self.list_playlists(include_managed=False)
         if scope == RunScope.ALL_PLAYLISTS:
             return playlists
+        if scope == RunScope.SELECTED_PLAYLISTS:
+            selected_ids = set(selected_playlist_ids or [])
+            return [playlist for playlist in playlists if playlist.playlist_id in selected_ids]
         return [playlist for playlist in playlists if playlist.playlist_id == selected_playlist_id]
 
     def ensure_managed_playlists(

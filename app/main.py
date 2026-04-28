@@ -98,28 +98,37 @@ def render_run_detail(request: Request, run: RunDetail, status_code: int = 200):
     )
 
 
-def get_base_context(request: Request) -> dict[str, Any]:
+def get_login_context(request: Request) -> dict[str, Any]:
     settings = settings_service.get_settings()
-    masked_settings = settings.masked()
     setup_errors = settings_service.validate(settings)
-    youtube_connected = google_token_payload(request) is not None
+    return {
+        "request": request,
+        "app_name": APP_NAME,
+        "flash": pop_flash(request),
+        "errors": list(setup_errors),
+        "settings_complete": settings.is_complete(),
+        "youtube_connected": google_token_payload(request) is not None,
+    }
+
+
+def get_preview_context(request: Request) -> dict[str, Any]:
+    settings = settings_service.get_settings()
+    token_payload = google_token_payload(request)
     playlists = []
-    errors: list[str] = list(setup_errors)
-    if settings.is_complete() and youtube_connected:
+    errors: list[str] = []
+    if settings.is_complete() and token_payload is not None:
         try:
-            youtube_service = YouTubeService(settings, db, google_token_payload(request))
+            youtube_service = YouTubeService(settings, db, token_payload)
             playlists = youtube_service.list_playlists(include_managed=False)
         except Exception as exc:
-            youtube_connected = False
             errors.append(str(exc))
     return {
         "request": request,
         "app_name": APP_NAME,
         "flash": pop_flash(request),
         "errors": errors,
-        "settings": masked_settings,
         "settings_complete": settings.is_complete(),
-        "youtube_connected": youtube_connected,
+        "youtube_connected": token_payload is not None,
         "playlists": playlists,
         "run_scopes": list(RunScope),
         "mood_labels": MOOD_LABELS,
@@ -135,8 +144,48 @@ def redirect_uri_for(request: Request) -> str:
 
 @app.get("/")
 def home(request: Request):
-    context = get_base_context(request)
+    if settings_service.get_settings().is_complete() and google_token_payload(request) is not None:
+        return RedirectResponse(url="/preview", status_code=303)
+    context = get_login_context(request)
     return templates.TemplateResponse(request=request, name="index.html", context=context)
+
+
+@app.get("/preview")
+def preview_workspace(request: Request):
+    settings = settings_service.get_settings()
+    if not settings.is_complete():
+        return templates.TemplateResponse(
+            request=request,
+            name="index.html",
+            context=get_login_context(request),
+        )
+    if google_token_payload(request) is None:
+        set_flash(request, "Connect YouTube before generating a preview.", "error")
+        return RedirectResponse(url="/", status_code=303)
+    return templates.TemplateResponse(
+        request=request,
+        name="preview.html",
+        context=get_preview_context(request),
+    )
+
+
+@app.get("/finish")
+def finish(request: Request):
+    settings = settings_service.get_settings()
+    if not settings.is_complete() or google_token_payload(request) is None:
+        set_flash(request, "Connect YouTube before starting another preview.", "error")
+        return RedirectResponse(url="/", status_code=303)
+    return templates.TemplateResponse(
+        request=request,
+        name="finish.html",
+        context={
+            "request": request,
+            "app_name": APP_NAME,
+            "flash": pop_flash(request),
+            "settings_complete": settings.is_complete(),
+            "youtube_connected": True,
+        },
+    )
 
 
 @app.post("/auth/google/connect")
@@ -170,7 +219,7 @@ def google_callback(request: Request, code: str | None = None, state: str | None
     request.session.pop("google_oauth_state", None)
     request.session.pop("google_code_verifier", None)
     set_flash(request, "YouTube connected successfully.", "success")
-    response = RedirectResponse(url="/", status_code=303)
+    response = RedirectResponse(url="/preview", status_code=303)
     set_google_token_cookie(response, request, token_payload)
     return response
 
@@ -178,8 +227,9 @@ def google_callback(request: Request, code: str | None = None, state: str | None
 @app.post("/runs/preview")
 def preview_run(
     request: Request,
-    scope: str = Form(...),
+    scope: str = Form("selected_playlists"),
     selected_playlist_id: str = Form(""),
+    selected_playlist_ids: list[str] = Form(default=[]),
 ):
     settings = settings_service.get_settings()
     if not settings.is_complete():
@@ -195,16 +245,26 @@ def preview_run(
         run_scope = RunScope(scope)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid scope.") from exc
+    if selected_playlist_id and selected_playlist_id not in selected_playlist_ids:
+        selected_playlist_ids = [selected_playlist_id, *selected_playlist_ids]
+    if run_scope == RunScope.SELECTED_PLAYLISTS and not selected_playlist_ids:
+        set_flash(request, "Choose at least one playlist before generating a preview.", "error")
+        return RedirectResponse(url="/preview", status_code=303)
     if run_scope == RunScope.SINGLE_PLAYLIST and not selected_playlist_id:
-        set_flash(request, "Choose a playlist for single-playlist preview mode.", "error")
-        return RedirectResponse(url="/", status_code=303)
+        set_flash(request, "Choose a playlist before generating a preview.", "error")
+        return RedirectResponse(url="/preview", status_code=303)
     classifier = AzureOpenAIClassifier(settings, db)
     organizer = OrganizerService(db, youtube_service, classifier)
     try:
-        run = organizer.create_preview(run_scope, selected_playlist_id or None, persist=False)
+        run = organizer.create_preview(
+            run_scope,
+            selected_playlist_id or None,
+            source_playlist_ids=selected_playlist_ids,
+            persist=False,
+        )
     except AzureClassificationError as exc:
         set_flash(request, f"Preview failed during song classification: {exc}", "error")
-        return RedirectResponse(url="/", status_code=303)
+        return RedirectResponse(url="/preview", status_code=303)
     set_flash(request, "Preview generated.", "success")
     return render_run_detail(request, run)
 
@@ -272,5 +332,4 @@ async def apply_run(request: Request):
     except YouTubeSyncError as exc:
         set_flash(request, f"Applying playlists failed: {exc}", "error")
         return RedirectResponse(url="/", status_code=303)
-    set_flash(request, "Mood playlists synced to YouTube.", "success")
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url="/finish", status_code=303)

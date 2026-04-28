@@ -574,9 +574,17 @@ class FakeYouTubeService:
         }
         self.reconciled: dict[str, list[str]] = {}
 
-    def get_source_playlists(self, scope: RunScope, selected_playlist_id: str | None = None):
+    def get_source_playlists(
+        self,
+        scope: RunScope,
+        selected_playlist_id: str | None = None,
+        selected_playlist_ids: list[str] | None = None,
+    ):
         if scope == RunScope.ALL_PLAYLISTS:
             return self.playlists
+        if scope == RunScope.SELECTED_PLAYLISTS:
+            selected_ids = set(selected_playlist_ids or [])
+            return [playlist for playlist in self.playlists if playlist.playlist_id in selected_ids]
         return [playlist for playlist in self.playlists if playlist.playlist_id == selected_playlist_id]
 
     def list_playlist_items(self, playlist_id: str, playlist_title: str):
@@ -663,3 +671,18 @@ def test_preview_single_playlist_and_apply_override(tmp_path: Path) -> None:
     chill_playlist = "managed-Chill / Relaxing"
     assert youtube.reconciled[happy_playlist] == ["v1", "v2"]
     assert youtube.reconciled[chill_playlist] == ["v1"]
+
+
+def test_preview_selected_playlists_supports_multiple_sources(tmp_path: Path) -> None:
+    db = build_temp_db(tmp_path)
+    organizer = OrganizerService(db, FakeYouTubeService(), FakeClassifier())
+
+    run = organizer.create_preview(
+        RunScope.SELECTED_PLAYLISTS,
+        source_playlist_ids=["source-1", "source-2"],
+    )
+
+    assert run.scope == RunScope.SELECTED_PLAYLISTS
+    assert run.source_playlist_id == "source-1,source-2"
+    assert run.source_playlist_title == "2 selected playlists"
+    assert run.summary.total_candidates == 3

@@ -58,9 +58,14 @@ class OrganizerService:
         self,
         scope: RunScope,
         source_playlist_id: str | None = None,
+        source_playlist_ids: list[str] | None = None,
         persist: bool = True,
     ) -> RunDetail:
-        source_playlists = self.youtube_service.get_source_playlists(scope, source_playlist_id)
+        source_playlists = self.youtube_service.get_source_playlists(
+            scope,
+            source_playlist_id,
+            source_playlist_ids,
+        )
         playlist_items = []
         for playlist in source_playlists:
             playlist_items.extend(
@@ -105,13 +110,17 @@ class OrganizerService:
             excluded_count=sum(1 for item in items if not item.default_included),
         )
         run_id = str(uuid.uuid4())
-        source_title = source_playlists[0].title if scope == RunScope.SINGLE_PLAYLIST and source_playlists else None
+        source_title = None
+        if scope == RunScope.SINGLE_PLAYLIST and source_playlists:
+            source_title = source_playlists[0].title
+        elif scope == RunScope.SELECTED_PLAYLISTS:
+            source_title = f"{len(source_playlists)} selected playlists"
         if not persist:
             return RunDetail(
                 run_id=run_id,
                 status=RunStatus.PREVIEWED,
                 scope=scope,
-                source_playlist_id=source_playlist_id,
+                source_playlist_id=source_playlist_id or ",".join(source_playlist_ids or []),
                 source_playlist_title=source_title,
                 created_at=utc_now(),
                 summary=summary,
@@ -121,7 +130,7 @@ class OrganizerService:
             run_id=run_id,
             status=RunStatus.PREVIEWED,
             scope=scope,
-            source_playlist_id=source_playlist_id,
+            source_playlist_id=source_playlist_id or ",".join(source_playlist_ids or []),
             source_playlist_title=source_title,
             created_at=utc_now(),
             summary_json=summary.model_dump(mode="json"),

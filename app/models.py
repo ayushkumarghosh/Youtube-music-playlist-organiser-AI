@@ -21,6 +21,7 @@ def utc_now() -> str:
 class RunScope(StrEnum):
     ALL_PLAYLISTS = "all_playlists"
     SINGLE_PLAYLIST = "single_playlist"
+    SELECTED_PLAYLISTS = "selected_playlists"
 
 
 class RunStatus(StrEnum):

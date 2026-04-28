@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="workspace-heading">
+    <div>
+      <h2>Choose playlists</h2>
+      <p>Select one or more source playlists to classify. Managed mood playlists are skipped automatically.</p>
+    </div>
+    <form action="/auth/google/connect" method="post">
+      <button type="submit" class="secondary-action">Change account</button>
+    </form>
+  </div>
+
+  {% if errors %}
+    <section class="panel alert-panel">
+      <div class="section-heading">
+        <h2>Could not load playlists</h2>
+        <p>YouTube returned an error while preparing the preview workspace.</p>
+      </div>
+      <ul class="error-list">
+        {% for error in errors %}
+          <li>{{ error }}</li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
+  <section class="panel primary-panel playlist-picker-panel">
+    <form
+      action="/runs/preview"
+      method="post"
+      class="playlist-picker-form"
+      data-loading-title="Generating preview..."
+      data-loading-message="Fetching playlists, classifying songs, and preparing the review screen."
+    >
+      <input type="hidden" name="scope" value="selected_playlists">
+
+      <div class="picker-toolbar">
+        <div class="section-heading">
+          <h2>Source playlists</h2>
+          <p>
+            {% if playlists %}
+              <span data-selection-count>0</span> of {{ playlists|length }} selected.
+            {% else %}
+              No playlists loaded yet.
+            {% endif %}
+          </p>
+        </div>
+        <button type="button" class="secondary-action" data-select-all-playlists {% if not playlists %}disabled{% endif %}>
+          Select all playlists
+        </button>
+      </div>
+
+      {% if playlists %}
+        <div class="playlist-select-grid" data-playlist-grid>
+          {% for playlist in playlists %}
+            <label class="playlist-select-card">
+              <input type="checkbox" name="selected_playlist_ids" value="{{ playlist.playlist_id }}" data-playlist-checkbox>
+              <span class="playlist-check" aria-hidden="true"></span>
+              <span class="playlist-card-main">
+                <strong>{{ playlist.title }}</strong>
+                <span>{{ playlist.privacy_status }}</span>
+              </span>
+              <span class="playlist-card-count">{{ playlist.item_count }} items</span>
+            </label>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="empty-state">
+          <strong>No source playlists available</strong>
+          <p>Once YouTube returns playlists, they will appear here for preview generation.</p>
+        </div>
+      {% endif %}
+
+      <div class="picker-actions">
+        <button type="submit" data-preview-submit disabled>
+          Preview mood assignment
+        </button>
+      </div>
+    </form>
+  </section>
+{% endblock %}
