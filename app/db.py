@@ -298,3 +298,10 @@ class Database:
                     run_id,
                 ),
             )
+
+    def delete_authorized_youtube_data(self) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM run_items")
+            conn.execute("DELETE FROM runs")
+            conn.execute("DELETE FROM classification_cache")
+            conn.execute("DELETE FROM tokens")

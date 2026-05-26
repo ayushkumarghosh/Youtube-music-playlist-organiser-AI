@@ -23,11 +23,20 @@
             <a class="button-link" href="/preview">Open preview workspace</a>
           {% endif %}
           <form action="/auth/google/connect" method="post">
+            <label class="policy-consent">
+              <input type="checkbox" name="policy_agreement" value="accepted" required>
+              <span>
+                I agree to the <a href="/terms">Terms</a> and
+                <a href="/privacy">Privacy Policy</a>.
+              </span>
+            </label>
             <button type="submit">Connect YouTube</button>
           </form>
         </div>
 
-        <p class="hint">The app only uses YouTube access for playlist reading and private playlist syncing.</p>
+        <p class="hint">
+          The app uses YouTube API Services only for playlist reading and private playlist syncing.
+        </p>
       {% endif %}
     </div>
   </section>

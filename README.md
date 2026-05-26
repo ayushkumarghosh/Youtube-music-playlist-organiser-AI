@@ -1,4 +1,4 @@
-# YouTube Mood Playlist Organizer
+# VibeShelf
 
 FastAPI app that signs into YouTube, classifies songs with Azure OpenAI, and syncs mood-based playlists back to your account. Songs can be assigned to multiple mood playlists when they fit more than one category.
 
@@ -52,3 +52,14 @@ https://<your-vercel-domain>/auth/google/callback
 ```
 
 Vercel Functions have a read-only deployment filesystem, so this deployment does not keep durable run history or a durable classification cache. The Google login token is kept in an encrypted HttpOnly browser cookie, and the active preview/apply flow is carried in encrypted browser-submitted state.
+
+The app requests the `https://www.googleapis.com/auth/youtube.force-ssl` OAuth scope so it can read the signed-in user's playlists and create or update private managed playlists after confirmation.
+
+## Policy Pages
+
+The app exposes public YouTube API compliance pages:
+
+- `/terms`
+- `/privacy`
+
+Add the deployed `/privacy` URL to the Google OAuth consent screen. The app footer also links to YouTube Terms, Google Privacy Policy, Google security settings, and the developer contact email. The Disconnect YouTube action revokes the Google token, clears the local token cookie, and deletes locally stored YouTube-derived run and classification data.

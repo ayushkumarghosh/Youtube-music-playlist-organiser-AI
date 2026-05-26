@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="panel legal-panel">
+    <div class="section-heading">
+      <h2>Terms of Use</h2>
+      <p>Effective date: May 15, 2026</p>
+    </div>
+
+    <div class="legal-copy">
+      <h3>Use of this app</h3>
+      <p>
+        By using {{ app_name }}, you agree to these Terms of Use. If you do not agree, do not use the app.
+      </p>
+
+      <h3>YouTube Terms</h3>
+      <p>
+        {{ app_name }} uses YouTube API Services. By using this app, you are also agreeing to be bound by the
+        <a href="{{ youtube_terms_url }}" rel="noopener noreferrer">YouTube Terms of Service</a>.
+      </p>
+
+      <h3>What the app does</h3>
+      <p>
+        The app lets a signed-in user read playlists from their own YouTube account, review mood assignments,
+        and create or update private mood playlists in that same account after user confirmation.
+      </p>
+
+      <h3>User control</h3>
+      <p>
+        The app shows a preview before writing playlist changes. Users decide which mood assignments to apply.
+        The app does not publish public playlists, upload videos, or expose a user's YouTube data to other users.
+      </p>
+      <p>
+        Users can disconnect YouTube access from inside the app. Disconnecting revokes the Google token, clears the
+        local token cookie, and deletes locally stored YouTube-derived run and classification data.
+      </p>
+
+      <h3>Contact</h3>
+      <p>
+        Questions about these terms can be sent to <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.
+      </p>
+    </div>
+  </section>
+{% endblock %}

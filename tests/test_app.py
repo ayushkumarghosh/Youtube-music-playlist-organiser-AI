@@ -17,7 +17,7 @@ from app.models import (
     SetupSettings,
 )
 from app.services.azure_openai import AzureClassificationError
-from app.services.youtube import YouTubeSyncError
+from app.services.youtube import YouTubeAuthError, YouTubeSyncError
 
 
 GOOGLE_CLIENT_SECRETS_JSON = '{"web":{"client_id":"client-id","client_secret":"client-secret","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token"}}'
@@ -27,7 +27,7 @@ def test_home_renders() -> None:
     client = TestClient(app)
     response = client.get("/")
     assert response.status_code == 200
-    assert "YouTube Mood Playlist Organizer" in response.text
+    assert "VibeShelf" in response.text
 
 
 def test_home_renders_login_only_without_status_or_preview_form(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -42,6 +42,9 @@ def test_home_renders_login_only_without_status_or_preview_form(monkeypatch: pyt
 
     assert response.status_code == 200
     assert "Connect YouTube" in response.text
+    assert 'href="/terms"' in response.text
+    assert 'href="/privacy"' in response.text
+    assert 'name="policy_agreement"' in response.text
     assert "Local utility" not in response.text
     assert "Readiness" not in response.text
     assert "YouTube connection" not in response.text
@@ -87,6 +90,32 @@ def test_home_does_not_render_credential_inputs(monkeypatch: pytest.MonkeyPatch)
     assert 'name="azure_openai_api_key"' not in response.text
     assert 'name="google_client_secrets_json"' not in response.text
     assert 'action="/settings/save"' not in response.text
+
+
+def test_terms_page_includes_youtube_terms() -> None:
+    client = TestClient(app)
+    response = client.get("/terms")
+
+    assert response.status_code == 200
+    assert "Terms of Use" in response.text
+    assert "https://www.youtube.com/t/terms" in response.text
+    assert "bound by the" in response.text
+    assert "YouTube Terms of Service" in response.text
+
+
+def test_privacy_page_includes_required_youtube_api_disclosures() -> None:
+    client = TestClient(app)
+    response = client.get("/privacy")
+
+    assert response.status_code == 200
+    assert "Privacy Policy" in response.text
+    assert "YouTube API Services" in response.text
+    assert "http://www.google.com/policies/privacy" in response.text
+    assert "https://security.google.com/settings/security/permissions" in response.text
+    assert "session cookie" in response.text
+    assert "Google token cookie" in response.text
+    assert "Azure OpenAI" in response.text
+    assert "ayush@scorptech.co" in response.text
 
 
 def test_preview_workspace_redirects_when_not_connected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -145,7 +174,7 @@ def test_preview_workspace_renders_playlists_and_preview_form(monkeypatch: pytes
 
     assert response.status_code == 200
     assert "Source playlists" in response.text
-    assert "Change account" in response.text
+    assert "Disconnect YouTube" in response.text
     assert "Road Trip" in response.text
     assert 'name="selected_playlist_ids"' in response.text
     assert 'data-select-all-playlists' in response.text
@@ -227,7 +256,11 @@ def test_google_callback_redirects_to_preview(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr("app.main.YouTubeService", FakeYouTubeService)
 
     client = TestClient(app)
-    connect_response = client.post("/auth/google/connect", follow_redirects=False)
+    connect_response = client.post(
+        "/auth/google/connect",
+        data={"policy_agreement": "accepted"},
+        follow_redirects=False,
+    )
     assert connect_response.status_code == 303
 
     callback_response = client.get(
@@ -237,6 +270,117 @@ def test_google_callback_redirects_to_preview(monkeypatch: pytest.MonkeyPatch) -
 
     assert callback_response.status_code == 303
     assert callback_response.headers["location"] == "/preview"
+
+
+def test_google_connect_requires_policy_agreement(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeSettingsService:
+        def get_settings(self):
+            return SetupSettings(
+                azure_openai_endpoint="https://example.openai.azure.com",
+                azure_openai_api_key="secret",
+                azure_openai_deployment="gpt-5.4",
+                google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
+                session_secret="secret",
+            )
+
+    class FakeYouTubeService:
+        def __init__(self, settings, db, token_payload=None):
+            pass
+
+        def build_authorization_url(self, redirect_uri):
+            raise AssertionError("OAuth should not start without policy agreement.")
+
+    monkeypatch.setattr("app.main.settings_service", FakeSettingsService())
+    monkeypatch.setattr("app.main.YouTubeService", FakeYouTubeService)
+
+    client = TestClient(app)
+    response = client.post("/auth/google/connect", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+
+
+def test_google_disconnect_revokes_token_and_deletes_local_youtube_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    revoked_payloads = []
+
+    class FakeSettingsService:
+        def get_settings(self):
+            return SetupSettings(
+                azure_openai_endpoint="https://example.openai.azure.com",
+                azure_openai_api_key="secret",
+                azure_openai_deployment="gpt-5.4",
+                google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
+                session_secret="secret",
+            )
+
+    class FakeDb:
+        deleted = False
+
+        def delete_authorized_youtube_data(self):
+            self.deleted = True
+
+    class FakeYouTubeService:
+        def __init__(self, settings, db, token_payload=None):
+            self.token_payload = token_payload
+
+        def revoke_token(self):
+            revoked_payloads.append(self.token_payload)
+
+    fake_db = FakeDb()
+    monkeypatch.setattr("app.main.settings_service", FakeSettingsService())
+    monkeypatch.setattr("app.main.google_token_payload", lambda request: {"refresh_token": "refresh-token"})
+    monkeypatch.setattr("app.main.db", fake_db)
+    monkeypatch.setattr("app.main.YouTubeService", FakeYouTubeService)
+
+    client = TestClient(app)
+    client.cookies.set("ytmp_google_token", "encrypted-token")
+
+    response = client.post("/auth/google/disconnect", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+    assert "ytmp_google_token" in response.headers["set-cookie"]
+    assert "Max-Age=0" in response.headers["set-cookie"]
+    assert revoked_payloads == [{"refresh_token": "refresh-token"}]
+    assert fake_db.deleted is True
+
+
+def test_google_disconnect_deletes_local_data_even_when_revoke_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeSettingsService:
+        def get_settings(self):
+            return SetupSettings(
+                azure_openai_endpoint="https://example.openai.azure.com",
+                azure_openai_api_key="secret",
+                azure_openai_deployment="gpt-5.4",
+                google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
+                session_secret="secret",
+            )
+
+    class FakeDb:
+        deleted = False
+
+        def delete_authorized_youtube_data(self):
+            self.deleted = True
+
+    class FakeYouTubeService:
+        def __init__(self, settings, db, token_payload=None):
+            pass
+
+        def revoke_token(self):
+            raise YouTubeAuthError("mock revoke failure")
+
+    fake_db = FakeDb()
+    monkeypatch.setattr("app.main.settings_service", FakeSettingsService())
+    monkeypatch.setattr("app.main.google_token_payload", lambda request: {"refresh_token": "refresh-token"})
+    monkeypatch.setattr("app.main.db", fake_db)
+    monkeypatch.setattr("app.main.YouTubeService", FakeYouTubeService)
+
+    client = TestClient(app)
+    response = client.post("/auth/google/disconnect", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert "ytmp_google_token" in response.headers["set-cookie"]
+    assert fake_db.deleted is True
 
 
 def test_preview_classification_error_redirects(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -424,5 +568,69 @@ def test_preview_response_includes_apply_loading_metadata(monkeypatch: pytest.Mo
 
     assert response.status_code == 200
     assert "Preview ready" in response.text
+    assert "data-progress-form" in response.text
+    assert 'data-progress-start-url="/runs/apply/start"' in response.text
     assert 'data-loading-title="Syncing to YouTube..."' in response.text
     assert "Creating or updating mood playlists and applying your reviewed assignments." in response.text
+
+
+def test_apply_start_returns_job_and_status_completes(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ImmediateExecutor:
+        def submit(self, fn, *args, **kwargs):
+            fn(*args, **kwargs)
+            return None
+
+    class FakeSettingsService:
+        def get_settings(self):
+            return SetupSettings(
+                azure_openai_endpoint="https://example.openai.azure.com",
+                azure_openai_api_key="secret",
+                azure_openai_deployment="gpt-5.4",
+                google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
+                session_secret="secret",
+            )
+
+    class FakeYouTubeService:
+        def __init__(self, settings, db, token_payload=None):
+            pass
+
+    class FakeOrganizerService:
+        def __init__(self, db, youtube_service, classifier):
+            pass
+
+        def apply_run(self, run_id, overrides, progress_callback=None):
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "stage": "syncing",
+                        "message": "Syncing Happy / Feel-good",
+                        "current": 1,
+                        "total": 1,
+                        "percent": 75,
+                    }
+                )
+            return {"total_assignments": 1, "playlists": {}}
+
+    monkeypatch.setattr("app.main.settings_service", FakeSettingsService())
+    monkeypatch.setattr("app.main.google_token_payload", lambda request: {"access_token": "token"})
+    monkeypatch.setattr("app.main.YouTubeService", FakeYouTubeService)
+    monkeypatch.setattr("app.main.OrganizerService", FakeOrganizerService)
+    monkeypatch.setattr("app.main.apply_executor", ImmediateExecutor())
+
+    client = TestClient(app)
+    response = client.post(
+        "/runs/apply/start",
+        data={"run_id": "run-123", "mood__video-1": "Happy / Feel-good"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job_id"]
+    assert payload["status_url"].startswith("/runs/apply/status/")
+
+    status_response = client.get(payload["status_url"])
+    assert status_response.status_code == 200
+    status_payload = status_response.json()
+    assert status_payload["status"] == "complete"
+    assert status_payload["percent"] == 100
+    assert status_payload["finish_url"] == "/finish"

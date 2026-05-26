@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from collections import defaultdict
 import uuid
 
+from app.constants import MOOD_LABELS
 from app.db import Database
 from app.models import (
     RunDetail,
@@ -19,6 +21,9 @@ from app.models import (
 )
 from app.services.azure_openai import AzureOpenAIClassifier
 from app.services.youtube import YouTubeService
+
+
+ProgressCallback = Callable[[dict[str, object]], None]
 
 
 def dedupe_candidates(items: list) -> list[SongCandidate]:
@@ -148,6 +153,7 @@ class OrganizerService:
         self,
         run_id: str,
         overrides: dict[str, list[str]],
+        progress_callback: ProgressCallback | None = None,
     ) -> dict[str, object]:
         run = self.db.get_run(run_id)
         if run is None:
@@ -166,48 +172,10 @@ class OrganizerService:
             final_moods[item.video_id] = selected_values
         self.db.update_run_items(run_id, final_moods, override_ids)
 
-        grouped_video_ids: dict[str, list[tuple[list[str], list[int], str]]] = defaultdict(list)
         updated_run = self.db.get_run(run_id)
         if updated_run is None:
             raise RuntimeError("Updated run not found.")
-        for item in updated_run.items:
-            if not item.final_moods:
-                continue
-            for mood in item.final_moods:
-                grouped_video_ids[mood.value].append(
-                    (item.source_playlists, item.source_positions, item.video_id)
-                )
-
-        managed_playlists = self.youtube_service.ensure_managed_playlists(
-            updated_run.scope,
-            updated_run.source_playlist_title,
-        )
-
-        sync_summary: dict[str, object] = {"playlists": {}, "total_assignments": 0}
-        for mood, playlist in managed_playlists.items():
-            ordered_video_ids = [
-                video_id
-                for _, _, video_id in sorted(
-                    grouped_video_ids.get(mood, []),
-                    key=lambda row: (
-                        [name.lower() for name in row[0]],
-                        row[1],
-                        row[2],
-                    ),
-                )
-            ]
-            sync_counts = self.youtube_service.reconcile_playlist(
-                playlist.playlist_id,
-                ordered_video_ids,
-            )
-            sync_summary["playlists"][mood] = {
-                "playlist_id": playlist.playlist_id,
-                "title": playlist.title,
-                "video_count": len(ordered_video_ids),
-                "sync_counts": sync_counts,
-            }
-            sync_summary["total_assignments"] = int(sync_summary["total_assignments"]) + len(ordered_video_ids)
-
+        sync_summary = self.sync_run_detail(updated_run, progress_callback)
         self.db.update_run_status(run_id, RunStatus.APPLIED, sync_summary)
         return sync_summary
 
@@ -215,6 +183,7 @@ class OrganizerService:
         self,
         run: RunDetail,
         overrides: dict[str, list[str]],
+        progress_callback: ProgressCallback | None = None,
     ) -> dict[str, object]:
         updated_items: list[RunItemView] = []
         for item in run.items:
@@ -231,8 +200,20 @@ class OrganizerService:
             )
             updated_items.append(updated_item)
 
+        updated_run = run.model_copy(update={"items": updated_items})
+        return self.sync_run_detail(updated_run, progress_callback)
+
+    def sync_run_detail(
+        self,
+        run: RunDetail,
+        progress_callback: ProgressCallback | None = None,
+    ) -> dict[str, object]:
+        def report(payload: dict[str, object]) -> None:
+            if progress_callback is not None:
+                progress_callback(payload)
+
         grouped_video_ids: dict[str, list[tuple[list[str], list[int], str]]] = defaultdict(list)
-        for item in updated_items:
+        for item in run.items:
             if not item.final_moods:
                 continue
             for mood in item.final_moods:
@@ -240,13 +221,23 @@ class OrganizerService:
                     (item.source_playlists, item.source_positions, item.video_id)
                 )
 
+        report(
+            {
+                "stage": "preparing",
+                "message": "Preparing mood assignments",
+                "current": 1,
+                "total": len(MOOD_LABELS) + 2,
+                "percent": 8,
+            }
+        )
         managed_playlists = self.youtube_service.ensure_managed_playlists(
             run.scope,
             run.source_playlist_title,
         )
 
         sync_summary: dict[str, object] = {"playlists": {}, "total_assignments": 0}
-        for mood, playlist in managed_playlists.items():
+        total_steps = len(managed_playlists) + 2
+        for index, (mood, playlist) in enumerate(managed_playlists.items(), start=2):
             ordered_video_ids = [
                 video_id
                 for _, _, video_id in sorted(
@@ -258,6 +249,17 @@ class OrganizerService:
                     ),
                 )
             ]
+            report(
+                {
+                    "stage": "syncing",
+                    "message": f"Syncing {mood}",
+                    "playlist": mood,
+                    "video_count": len(ordered_video_ids),
+                    "current": index,
+                    "total": total_steps,
+                    "percent": round((index - 1) / total_steps * 100),
+                }
+            )
             sync_counts = self.youtube_service.reconcile_playlist(
                 playlist.playlist_id,
                 ordered_video_ids,
@@ -270,4 +272,13 @@ class OrganizerService:
             }
             sync_summary["total_assignments"] = int(sync_summary["total_assignments"]) + len(ordered_video_ids)
 
+        report(
+            {
+                "stage": "complete",
+                "message": "Mood playlists synced",
+                "current": total_steps,
+                "total": total_steps,
+                "percent": 100,
+            }
+        )
         return sync_summary

@@ -2,9 +2,9 @@
 
 ## Application Overview
 
-Application name: YouTube Mood Playlist Organizer
+Application name: VibeShelf
 
-The YouTube Mood Playlist Organizer is a FastAPI web application that helps a signed-in user organize their own YouTube playlists into private mood-based playlists. The application reads the user's YouTube playlists and playlist items, classifies music items into mood categories using Azure OpenAI, shows the user a preview for review, and then creates or updates private managed playlists in the user's YouTube account after the user confirms the changes.
+VibeShelf is a FastAPI web application that helps a signed-in user organize their own YouTube playlists into private mood-based playlists. The application reads the user's YouTube playlists and playlist items, classifies music items into mood categories using Azure OpenAI, shows the user a preview for review, and then creates or updates private managed playlists in the user's YouTube account after the user confirms the changes.
 
 The application is intended for use by the account owner who signs in through Google OAuth. It is not designed to publish YouTube content publicly or expose YouTube data to other users.
 
@@ -44,10 +44,10 @@ The application uses the YouTube Data API v3 through the official Google API Pyt
 Requested OAuth scope:
 
 ```text
-https://www.googleapis.com/auth/youtube
+https://www.googleapis.com/auth/youtube.force-ssl
 ```
 
-This scope is used because the application must read the user's playlists and playlist items, and must create or update playlist resources in the user's own YouTube account.
+This scope is used because the application must read the user's playlists and playlist items, and must create or update playlist resources in the user's own YouTube account. The application does not request broader YouTube scopes.
 
 The application uses these YouTube API operations:
 
@@ -73,6 +73,8 @@ The application does not upload videos, modify videos, delete videos, post comme
 7. The OAuth token payload is stored in an encrypted, HttpOnly browser cookie.
 
 The application validates OAuth state during the callback to reduce cross-site request forgery risk. On HTTPS deployments, the token cookie is marked secure.
+
+When the user clicks `Disconnect YouTube`, the application calls Google's token revocation endpoint, clears the local Google token cookie, clears OAuth session state, deletes locally stored run history and classification cache data derived from YouTube API data, and clears in-memory apply job results.
 
 ## User Workflow
 
@@ -159,15 +161,23 @@ The application processes:
 
 OAuth tokens are encrypted before being stored in the browser cookie. The application does not store Google OAuth secrets in the browser. Google OAuth client configuration is read from the `GOOGLE_CLIENT_SECRETS_JSON` environment variable.
 
+Users can revoke access inside the app with `Disconnect YouTube` or from Google's security settings. The in-app disconnect action programmatically revokes the token immediately and deletes locally stored YouTube-derived data. If revocation has already happened outside the app, the next failed token use requires the user to reconnect and local browser cookies can still be cleared with `Disconnect YouTube`.
+
 ## Playlist Creation and Management
 
-The application creates private managed playlists for mood categories. Managed playlists are identified by an internal marker in the playlist description:
+The application creates private managed playlists for mood categories. New managed playlists are identified by this internal marker in the playlist description:
+
+```text
+[vibeshelf-managed]
+```
+
+Existing managed playlists with this legacy marker are also recognized:
 
 ```text
 [yt-mood-organizer-managed]
 ```
 
-Managed playlist descriptions include the source scope and mood. The application uses this marker to avoid treating its own generated playlists as source playlists.
+Managed playlist descriptions include the source scope and mood. The application uses this marker to avoid treating its own generated playlists as source playlists. Existing playlists with the legacy marker continue to be recognized.
 
 Created playlists are private by default.
 
@@ -182,8 +192,10 @@ YouTube data is not sold, shared with advertising networks, or made available to
 ## Security Controls
 
 - Google OAuth is performed through Google's authorization flow.
+- The application requests the `youtube.force-ssl` scope and does not request broader YouTube scopes.
 - OAuth state is validated during callback.
 - OAuth token payload is encrypted before storage in an HttpOnly cookie.
+- The Disconnect YouTube action programmatically revokes the Google token and deletes local YouTube-derived run/cache data.
 - Secrets are read from environment variables.
 - The UI masks secret configuration values.
 - Managed playlists are created as private playlists.
@@ -226,4 +238,4 @@ Primary implementation files:
 
 ## Summary
 
-The YouTube Mood Playlist Organizer uses YouTube API Services only to let a signed-in user read their own playlists, review mood assignments, and create or update private mood playlists in their own account. The application displays YouTube playlist and playlist item metadata to the signed-in user, requires user confirmation before writing playlists, and stores credentials and tokens using server-side environment variables and encrypted browser cookies.
+VibeShelf uses YouTube API Services only to let a signed-in user read their own playlists, review mood assignments, and create or update private mood playlists in their own account. The application displays YouTube playlist and playlist item metadata to the signed-in user, requires user confirmation before writing playlists, and stores credentials and tokens using server-side environment variables and encrypted browser cookies.

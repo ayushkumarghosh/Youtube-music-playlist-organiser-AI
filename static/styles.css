@@ -85,6 +85,36 @@ textarea {
   text-align: right;
 }
 
+.app-footer {
+  margin-top: 22px;
+  padding: 18px 0 0;
+  border-top: 1px solid var(--border);
+}
+
+.app-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+}
+
+.app-footer form {
+  margin: 0;
+}
+
+.app-footer a,
+.legal-copy a,
+.policy-consent a {
+  color: #9af4eb;
+  text-decoration: none;
+}
+
+.app-footer a:hover,
+.legal-copy a:hover,
+.policy-consent a:hover {
+  text-decoration: underline;
+}
+
 .eyebrow {
   margin: 0 0 4px;
   text-transform: uppercase;
@@ -163,6 +193,28 @@ textarea {
   margin: 16px 0 10px;
 }
 
+.auth-actions form {
+  display: grid;
+  gap: 10px;
+}
+
+.policy-consent {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  max-width: 430px;
+  color: var(--muted-strong);
+  font-size: 0.86rem;
+}
+
+.policy-consent span {
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
+  font-weight: 600;
+}
+
 .workspace-heading {
   display: flex;
   align-items: flex-start;
@@ -229,6 +281,27 @@ textarea {
 .empty-state p {
   margin: 3px 0 0;
   color: var(--muted);
+}
+
+.legal-panel {
+  max-width: 860px;
+  margin: 0 auto 16px;
+}
+
+.legal-copy {
+  display: grid;
+  gap: 12px;
+}
+
+.legal-copy h3 {
+  margin: 6px 0 0;
+  color: #f6f8fc;
+  font-size: 0.98rem;
+}
+
+.legal-copy p {
+  margin: 0;
+  color: var(--muted-strong);
 }
 
 .inline-heading {
@@ -318,7 +391,8 @@ button[disabled] {
 }
 
 .secondary-button,
-.secondary-action {
+.secondary-action,
+.footer-button {
   background: rgba(10, 16, 26, 0.74);
   color: var(--text);
   border-color: var(--border-strong);
@@ -326,10 +400,17 @@ button[disabled] {
 }
 
 .secondary-button:hover,
-.secondary-action:hover {
+.secondary-action:hover,
+.footer-button:hover {
   color: #f6f8fc;
   background: rgba(24, 34, 51, 0.92);
   border-color: rgba(148, 163, 184, 0.42);
+}
+
+.footer-button {
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 0.82rem;
 }
 
 .panel-actions {
@@ -847,6 +928,21 @@ form.is-submitting {
   border-radius: inherit;
   background: linear-gradient(90deg, transparent, var(--accent), transparent);
   animation: indeterminate 1.1s ease-in-out infinite;
+}
+
+.loading-overlay.is-progress .loading-bar span {
+  width: 0;
+  background: linear-gradient(90deg, var(--accent-dark), var(--accent));
+  animation: none;
+  transition: width 260ms ease;
+}
+
+.loading-progress-text {
+  grid-column: 1 / -1;
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 700;
 }
 
 @keyframes spin {

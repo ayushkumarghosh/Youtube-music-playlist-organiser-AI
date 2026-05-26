@@ -6,6 +6,9 @@ import json
 import logging
 import time
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -15,6 +18,8 @@ from googleapiclient.errors import HttpError
 from app.constants import (
     APP_MANAGED_MARKER,
     APP_PLAYLIST_PREFIX,
+    APP_NAME,
+    LEGACY_APP_MANAGED_MARKERS,
     MOOD_LABELS,
     PLAYLIST_ITEMS_PAGE_SIZE,
     YOUTUBE_API_RETRY_ATTEMPTS,
@@ -23,8 +28,9 @@ from app.db import Database
 from app.models import PlaylistItemRecord, PlaylistSummary, RunScope, SetupSettings
 
 
-GOOGLE_SCOPES = ["https://www.googleapis.com/auth/youtube"]
+GOOGLE_SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
 GOOGLE_PROVIDER = "google"
+GOOGLE_TOKEN_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 logger = logging.getLogger(__name__)
 
 
@@ -37,7 +43,8 @@ class YouTubeSyncError(RuntimeError):
 
 
 def is_managed_playlist(title: str, description: str = "") -> bool:
-    return title.startswith(f"{APP_PLAYLIST_PREFIX} [") or APP_MANAGED_MARKER in description
+    managed_markers = [APP_MANAGED_MARKER, *LEGACY_APP_MANAGED_MARKERS]
+    return title.startswith(f"{APP_PLAYLIST_PREFIX} [") or any(marker in description for marker in managed_markers)
 
 
 def build_managed_playlist_title(scope: RunScope, mood: str, source_playlist_title: str | None = None) -> str:
@@ -52,13 +59,13 @@ def build_managed_playlist_description(scope: RunScope, mood: str, source_playli
     else:
         source_label = source_playlist_title or "Selected playlist"
     return (
-        f"{APP_MANAGED_MARKER} Managed by YouTube Mood Playlist Organizer. "
+        f"{APP_MANAGED_MARKER} Managed by {APP_NAME}. "
         f"Scope: {source_label}. Mood: {mood}."
     )
 
 
 def extract_managed_playlist_mood(title: str, description: str = "") -> str | None:
-    if APP_MANAGED_MARKER in description:
+    if any(marker in description for marker in [APP_MANAGED_MARKER, *LEGACY_APP_MANAGED_MARKERS]):
         marker = "Mood: "
         start = description.find(marker)
         if start != -1:
@@ -141,6 +148,29 @@ class YouTubeService:
 
     def _client(self):
         return build("youtube", "v3", credentials=self._credentials(), cache_discovery=False)
+
+    def revoke_token(self) -> None:
+        if not self.token_payload:
+            return
+        token = self.token_payload.get("refresh_token") or self.token_payload.get("token")
+        if not token:
+            return
+        body = urlencode({"token": token}).encode("utf-8")
+        request = Request(
+            GOOGLE_TOKEN_REVOKE_URL,
+            data=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=10):
+                return
+        except HTTPError as exc:
+            if exc.code == 400:
+                return
+            raise YouTubeAuthError(f"Could not revoke Google authorization: HTTP {exc.code}.") from exc
+        except URLError as exc:
+            raise YouTubeAuthError(f"Could not revoke Google authorization: {exc.reason}.") from exc
 
     def list_playlists(self, include_managed: bool = False) -> list[PlaylistSummary]:
         youtube = self._client()

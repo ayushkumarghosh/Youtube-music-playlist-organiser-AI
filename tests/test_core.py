@@ -15,6 +15,7 @@ from app.models import (
     MoodLabel,
     PlaylistItemRecord,
     RunScope,
+    RunStatus,
     SetupSettings,
     SongCandidate,
 )
@@ -23,6 +24,7 @@ from app.services.settings import SettingsService
 from app.services.azure_openai import AzureClassificationError, AzureOpenAIClassifier, build_cache_key
 from app.services.organizer import OrganizerService, dedupe_candidates
 from app.services.youtube import (
+    GOOGLE_SCOPES,
     YouTubeService,
     YouTubeSyncError,
     build_managed_playlist_title,
@@ -89,6 +91,10 @@ def test_settings_validation_reports_missing_and_invalid_env(tmp_path: Path, mon
     assert SettingsService(db).validate() == ["GOOGLE_CLIENT_SECRETS_JSON must be valid JSON."]
 
 
+def test_youtube_oauth_uses_narrow_playlist_write_scope() -> None:
+    assert GOOGLE_SCOPES == ["https://www.googleapis.com/auth/youtube.force-ssl"]
+
+
 def test_encrypted_browser_state_round_trip_and_rejects_invalid_token() -> None:
     token = encrypt_json({"token": "abc", "nested": {"ok": True}}, "session-secret")
 
@@ -129,6 +135,7 @@ def make_http_error(status: int, reason: str, message: str) -> HttpError:
 def test_managed_playlist_detection_and_naming() -> None:
     title = build_managed_playlist_title(RunScope.ALL_PLAYLISTS, "Happy / Feel-good")
     assert title == "Happy / Feel-good"
+    assert is_managed_playlist(title, "[vibeshelf-managed] managed")
     assert is_managed_playlist(title, "[yt-mood-organizer-managed] managed")
     assert is_managed_playlist("Custom playlist", "[yt-mood-organizer-managed] managed")
     assert not is_managed_playlist("Road trip", "normal playlist")
@@ -138,7 +145,14 @@ def test_extract_managed_playlist_mood_supports_new_and_legacy_formats() -> None
     assert (
         extract_managed_playlist_mood(
             "Happy / Feel-good",
-            "[yt-mood-organizer-managed] Managed by YouTube Mood Playlist Organizer. Scope: All playlists. Mood: Happy / Feel-good.",
+            "[vibeshelf-managed] Managed by VibeShelf. Scope: All playlists. Mood: Happy / Feel-good.",
+        )
+        == "Happy / Feel-good"
+    )
+    assert (
+        extract_managed_playlist_mood(
+            "Happy / Feel-good",
+            "[yt-mood-organizer-managed] Managed by VibeShelf. Scope: All playlists. Mood: Happy / Feel-good.",
         )
         == "Happy / Feel-good"
     )
@@ -507,6 +521,94 @@ def test_youtube_request_raises_sync_error_for_non_retryable_http_error(tmp_path
 
     with pytest.raises(YouTubeSyncError):
         service._execute_request(FakeRequest, "adding a test video")
+
+
+def test_youtube_revoke_token_posts_refresh_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db = build_temp_db(tmp_path)
+    service = YouTubeService(
+        SetupSettings(
+            azure_openai_endpoint="https://example.openai.azure.com",
+            azure_openai_api_key="secret",
+            azure_openai_deployment="gpt-5.4",
+            google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
+            session_secret="secret",
+        ),
+        db,
+        {"token": "access-token", "refresh_token": "refresh-token"},
+    )
+    calls = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    def fake_urlopen(request, timeout):
+        calls.append((request.full_url, request.data, timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr("app.services.youtube.urlopen", fake_urlopen)
+
+    service.revoke_token()
+
+    assert calls == [
+        (
+            "https://oauth2.googleapis.com/revoke",
+            b"token=refresh-token",
+            10,
+        )
+    ]
+
+
+def test_delete_authorized_youtube_data_clears_runs_cache_and_tokens(tmp_path: Path) -> None:
+    db = build_temp_db(tmp_path)
+    db.save_token_payload("google", {"token": "abc"})
+    db.save_cached_classification(
+        cache_key="cache-key",
+        video_id="video-1",
+        metadata_hash="hash",
+        prompt_version="prompt",
+        payload={"ok": True},
+        updated_at="now",
+    )
+    db.save_run(
+        run_id="run-1",
+        status=RunStatus.PREVIEWED,
+        scope=RunScope.SELECTED_PLAYLISTS,
+        source_playlist_id="playlist-1",
+        source_playlist_title="Road Trip",
+        created_at="now",
+        summary_json={
+            "total_candidates": 1,
+            "classified_count": 1,
+            "default_included_count": 1,
+            "excluded_count": 0,
+        },
+        items=[
+            {
+                "video_id": "video-1",
+                "title": "Song",
+                "channel_title": "Artist",
+                "description": "desc",
+                "source_playlists": ["Road Trip"],
+                "source_positions": [0],
+                "suggested_moods": [MoodLabel.HAPPY],
+                "final_moods": [MoodLabel.HAPPY],
+                "confidence": 90,
+                "reason": "reason",
+                "is_music": True,
+                "default_included": True,
+            }
+        ],
+    )
+
+    db.delete_authorized_youtube_data()
+
+    assert db.load_token_payload("google") is None
+    assert db.load_cached_classification("cache-key") is None
+    assert db.get_run("run-1") is None
 
 
 def test_reconcile_playlist_only_appends_missing_videos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

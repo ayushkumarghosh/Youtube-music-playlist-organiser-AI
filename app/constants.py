@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-APP_MANAGED_MARKER = "[yt-mood-organizer-managed]"
+APP_MANAGED_MARKER = "[vibeshelf-managed]"
+LEGACY_APP_MANAGED_MARKERS = ["[yt-mood-organizer-managed]"]
 APP_PLAYLIST_PREFIX = "Mood"
-APP_NAME = "YouTube Mood Playlist Organizer"
+APP_NAME = "VibeShelf"
 APP_DATA_DIR = "data"
 DB_FILENAME = "app.db"
 TOKENS_FILENAME = "google_token.json"

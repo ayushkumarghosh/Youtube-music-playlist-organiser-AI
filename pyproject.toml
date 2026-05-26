@@ -1,7 +1,7 @@
 [project]
-name = "yt-mood-playlist-organizer"
+name = "vibeshelf"
 version = "0.1.0"
-description = "Local FastAPI app to organize YouTube songs into mood playlists with Azure OpenAI."
+description = "FastAPI app to organize songs into mood playlists with Azure OpenAI."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

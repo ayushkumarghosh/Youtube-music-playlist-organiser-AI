@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="panel legal-panel">
+    <div class="section-heading">
+      <h2>Privacy Policy</h2>
+      <p>Effective date: May 15, 2026</p>
+    </div>
+
+    <div class="legal-copy">
+      <h3>YouTube API Services</h3>
+      <p>
+        {{ app_name }} uses YouTube API Services to let a signed-in user organize their own YouTube playlists.
+        The app is also subject to the
+        <a href="{{ google_privacy_policy_url }}" rel="noopener noreferrer">Google Privacy Policy</a>.
+      </p>
+
+      <h3>Information accessed</h3>
+      <p>
+        After you sign in with Google, the app may access playlist IDs, playlist titles, playlist descriptions,
+        playlist item counts, playlist privacy status, playlist item IDs, video IDs, video titles, video
+        descriptions, owner channel titles, source playlist and position metadata, and OAuth token data.
+      </p>
+
+      <h3>How information is used</h3>
+      <p>
+        The app uses this information for playlist selection, song classification, preview generation,
+        user-confirmed private playlist sync, classification caching, and session continuity. The app only uses
+        YouTube data to provide the playlist organization features requested by the signed-in user.
+      </p>
+      <p>
+        The app requests the YouTube OAuth scope needed to read playlists and create or update private managed
+        playlists after user confirmation. It does not use YouTube data for advertising, profiling, or unrelated
+        secondary purposes.
+      </p>
+
+      <h3>Sharing and processing</h3>
+      <p>
+        The app shares data with YouTube and Google APIs for authorization and playlist operations. It sends the
+        provided video metadata to the configured Azure OpenAI endpoint for mood classification. The app does not
+        sell YouTube data, share it with advertising networks, or make it available to unrelated third parties.
+      </p>
+
+      <h3>Storage</h3>
+      <p>
+        The app stores the Google OAuth token payload in an encrypted HttpOnly browser cookie. Preview and apply
+        state is carried in encrypted browser-submitted state. Local runs and classification cache entries may be
+        stored in SQLite. On Vercel deployments, the deployment filesystem is ephemeral, so durable local run
+        history and durable local classification cache are not kept by the deployment.
+      </p>
+
+      <h3>Cookies and device storage</h3>
+      <p>
+        The app uses a session cookie, a Google token cookie, and encrypted app state for authentication and
+        workflow continuity. The app does not use advertising cookies.
+      </p>
+
+      <h3>Revoke access and delete local access</h3>
+      <p>
+        You can use the app's Disconnect YouTube action to revoke the Google token, clear the local Google token
+        cookie, and delete locally stored YouTube-derived run and classification data. You can also revoke this
+        app's access to your Google data at the
+        <a href="{{ google_security_settings_url }}" rel="noopener noreferrer">Google security settings page</a>.
+      </p>
+
+      <h3>Contact</h3>
+      <p>
+        Privacy questions or complaints can be sent to
+        <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.
+      </p>
+    </div>
+  </section>
+{% endblock %}

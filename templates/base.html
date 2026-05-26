@@ -15,7 +15,8 @@
         <p class="loading-title" id="loading-title">Working...</p>
         <p class="loading-message" id="loading-message">Please keep this tab open.</p>
       </div>
-      <div class="loading-bar" aria-hidden="true"><span></span></div>
+      <div class="loading-bar" aria-hidden="true"><span id="loading-progress-bar"></span></div>
+      <p class="loading-progress-text" id="loading-progress-text"></p>
     </div>
   </div>
 
@@ -34,6 +35,22 @@
     {% endif %}
 
     {% block content %}{% endblock %}
+
+    <footer class="app-footer">
+      <nav aria-label="Policy links">
+        <a href="/terms">Terms</a>
+        <a href="/privacy">Privacy Policy</a>
+        <a href="https://www.youtube.com/t/terms" rel="noopener noreferrer">YouTube Terms</a>
+        <a href="http://www.google.com/policies/privacy" rel="noopener noreferrer">Google Privacy Policy</a>
+        <a href="https://security.google.com/settings/security/permissions" rel="noopener noreferrer">Revoke Google access</a>
+        <a href="mailto:ayush@scorptech.co">Contact</a>
+        {% if youtube_connected %}
+          <form action="/auth/google/disconnect" method="post">
+            <button type="submit" class="footer-button">Disconnect YouTube</button>
+          </form>
+        {% endif %}
+      </nav>
+    </footer>
   </div>
 </body>
 </html>
