@@ -78,6 +78,21 @@ textarea {
   font-size: clamp(1.35rem, 1rem + 1vw, 2rem);
 }
 
+.brand-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.brand-link:hover {
+  color: #ffffff;
+}
+
+.brand-link:focus-visible {
+  outline: 2px solid rgba(61, 214, 198, 0.36);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
 .app-summary {
   max-width: 520px;
   margin: 0;
