@@ -7,15 +7,24 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from hashlib import sha256
 import json
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.constants import MOOD_LABELS, PROMPT_VERSION
+from app.constants import BUILT_IN_CATEGORY_SETS, CATEGORY_SET_MOOD_ID, MOOD_LABELS, PROMPT_VERSION
+
+
+SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def slugify_label(value: str) -> str:
+    slug = SLUG_PATTERN.sub("-", value.strip().lower()).strip("-")
+    return slug or "label"
 
 
 class RunScope(StrEnum):
@@ -39,6 +48,132 @@ class MoodLabel(StrEnum):
     DARK = "Dark / Intense"
 
 
+class CategoryLabelDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slug: str = Field(min_length=1, max_length=90)
+    name: str = Field(min_length=1, max_length=90)
+    description: str = Field(default="", max_length=300)
+
+    @field_validator("slug", "name", "description", mode="before")
+    @classmethod
+    def strip_text(cls, value: Any) -> str:
+        return "" if value is None else str(value).strip()
+
+    @field_validator("slug")
+    @classmethod
+    def normalize_slug(cls, value: str) -> str:
+        return slugify_label(value)
+
+
+class CategorySetDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=120)
+    name: str = Field(min_length=1, max_length=90)
+    description: str = Field(default="", max_length=300)
+    labels: list[CategoryLabelDefinition] = Field(min_length=1)
+    source: str = Field(default="builtin")
+    prompt: str = Field(default="", max_length=1500)
+    archived: bool = False
+    created_at: str = ""
+    updated_at: str = ""
+
+    @field_validator("id", "name", "description", "source", "prompt", mode="before")
+    @classmethod
+    def strip_text(cls, value: Any) -> str:
+        return "" if value is None else str(value).strip()
+
+    @field_validator("id")
+    @classmethod
+    def normalize_id(cls, value: str) -> str:
+        return slugify_label(value)
+
+    @model_validator(mode="after")
+    def validate_labels(self) -> "CategorySetDefinition":
+        slugs = [label.slug for label in self.labels]
+        names = [label.name.casefold() for label in self.labels]
+        if len(set(slugs)) != len(slugs):
+            raise ValueError("Category label slugs must be unique.")
+        if len(set(names)) != len(names):
+            raise ValueError("Category label names must be unique.")
+        return self
+
+    def label_for_slug(self, slug: str) -> CategoryLabelDefinition | None:
+        normalized = slugify_label(slug)
+        return next((label for label in self.labels if label.slug == normalized), None)
+
+    def label_names_for_slugs(self, slugs: list[str]) -> list[str]:
+        names = []
+        for slug in slugs:
+            label = self.label_for_slug(slug)
+            if label is not None:
+                names.append(label.name)
+        return names
+
+    @property
+    def definition_hash(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"created_at", "updated_at"})
+        return sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+class CategoryAssignment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category_id: str = Field(min_length=1)
+    label_slugs: list[str] = Field(default_factory=list)
+    confidence: int = Field(default=0, ge=0, le=100)
+    reason: str = Field(default="", max_length=300)
+
+    @field_validator("category_id", mode="before")
+    @classmethod
+    def normalize_category_id(cls, value: Any) -> str:
+        return slugify_label(str(value))
+
+    @field_validator("label_slugs", mode="before")
+    @classmethod
+    def normalize_label_input(cls, value: Any) -> list[str]:
+        if value in (None, "", []):
+            return []
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, (list, tuple, set)):
+            raise TypeError("label_slugs must be a string or list of strings.")
+        return [slugify_label(str(item)) for item in value if str(item).strip()]
+
+    @field_validator("label_slugs")
+    @classmethod
+    def dedupe_labels(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(values))
+
+
+def category_set_from_data(data: dict[str, Any]) -> CategorySetDefinition:
+    return CategorySetDefinition.model_validate(data)
+
+
+def built_in_category_sets() -> list[CategorySetDefinition]:
+    return [category_set_from_data(data) for data in BUILT_IN_CATEGORY_SETS]
+
+
+def default_mood_category_set() -> CategorySetDefinition:
+    return built_in_category_sets()[0]
+
+
+def find_category_set(category_sets: list[CategorySetDefinition], category_id: str) -> CategorySetDefinition | None:
+    normalized = slugify_label(category_id)
+    return next((category for category in category_sets if category.id == normalized), None)
+
+
+def category_sets_hash(category_sets: list[CategorySetDefinition]) -> str:
+    payload = [category.model_dump(mode="json", exclude={"created_at", "updated_at"}) for category in category_sets]
+    return sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+MOOD_CATEGORY = default_mood_category_set()
+MOOD_NAME_TO_SLUG = {label.name: label.slug for label in MOOD_CATEGORY.labels}
+MOOD_SLUG_TO_NAME = {label.slug: label.name for label in MOOD_CATEGORY.labels}
+
+
 def normalize_mood_labels(values: Any) -> list[MoodLabel]:
     if values in (None, "", []):
         return []
@@ -51,10 +186,28 @@ def normalize_mood_labels(values: Any) -> list[MoodLabel]:
     for value in values:
         if value in (None, ""):
             continue
-        mood = value if isinstance(value, MoodLabel) else MoodLabel(str(value))
+        text = value.value if isinstance(value, MoodLabel) else str(value)
+        text = MOOD_SLUG_TO_NAME.get(slugify_label(text), text)
+        mood = MoodLabel(text)
         normalized_values.add(mood.value)
 
     return [MoodLabel(label) for label in MOOD_LABELS if label in normalized_values]
+
+
+def mood_assignment_from_values(values: Any, *, confidence: int = 0, reason: str = "") -> CategoryAssignment:
+    moods = normalize_mood_labels(values)
+    return CategoryAssignment(
+        category_id=CATEGORY_SET_MOOD_ID,
+        label_slugs=[MOOD_NAME_TO_SLUG[mood.value] for mood in moods],
+        confidence=confidence,
+        reason=reason,
+    )
+
+
+def mood_values_from_assignment(assignment: CategoryAssignment | None) -> list[MoodLabel]:
+    if assignment is None or assignment.category_id != CATEGORY_SET_MOOD_ID:
+        return []
+    return normalize_mood_labels([MOOD_SLUG_TO_NAME.get(slug, slug) for slug in assignment.label_slugs])
 
 
 def serialize_mood_labels(values: Any) -> str:
@@ -154,6 +307,15 @@ class MoodClassification(BaseModel):
     def mood(self) -> MoodLabel | None:
         return self.moods[0] if self.moods else None
 
+    def to_category_classification(self) -> "SongCategoryClassification":
+        assignment = mood_assignment_from_values(self.moods, confidence=self.confidence, reason=self.reason)
+        return SongCategoryClassification(
+            is_music=self.is_music,
+            assignments=[assignment] if self.is_music else [],
+            model_name=self.model_name,
+            prompt_version=self.prompt_version,
+        )
+
 
 class MoodClassificationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -200,6 +362,93 @@ class BatchMoodClassificationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[BatchMoodClassificationItem]
+
+
+class SongCategoryClassification(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    is_music: bool
+    assignments: list[CategoryAssignment] = Field(default_factory=list)
+    model_name: str = Field(default="")
+    prompt_version: str = Field(default=PROMPT_VERSION)
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_legacy_moods(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "assignments" not in data and "moods" in data:
+            data = dict(data)
+            data["assignments"] = [
+                mood_assignment_from_values(
+                    data.get("moods", []),
+                    confidence=int(data.get("confidence", 0) or 0),
+                    reason=str(data.get("reason", "")),
+                ).model_dump(mode="json")
+            ]
+        return data
+
+    @property
+    def moods(self) -> list[MoodLabel]:
+        return mood_values_from_assignment(self.assignment_for(CATEGORY_SET_MOOD_ID))
+
+    @property
+    def confidence(self) -> int:
+        if not self.assignments:
+            return 0
+        return max(assignment.confidence for assignment in self.assignments)
+
+    @property
+    def reason(self) -> str:
+        reasons = [assignment.reason for assignment in self.assignments if assignment.reason]
+        return reasons[0] if reasons else "No category matched."
+
+    def assignment_for(self, category_id: str) -> CategoryAssignment | None:
+        normalized = slugify_label(category_id)
+        return next((assignment for assignment in self.assignments if assignment.category_id == normalized), None)
+
+
+class BatchCategoryClassificationItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    video_id: str = Field(min_length=1)
+    is_music: bool
+    assignments: list[CategoryAssignment] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_non_music(self) -> "BatchCategoryClassificationItem":
+        if not self.is_music and any(assignment.label_slugs for assignment in self.assignments):
+            raise ValueError("Non-music rows must not include category labels.")
+        return self
+
+
+class BatchCategoryClassificationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[BatchCategoryClassificationItem]
+
+
+class CustomCategoryProposalLabel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=90)
+    description: str = Field(default="", max_length=300)
+
+    @field_validator("name", "description", mode="before")
+    @classmethod
+    def strip_text(cls, value: Any) -> str:
+        return "" if value is None else str(value).strip()
+
+
+class CustomCategoryProposalResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    labels: list[CustomCategoryProposalLabel] = Field(min_length=2, max_length=12)
+
+    @model_validator(mode="after")
+    def validate_unique_names(self) -> "CustomCategoryProposalResponse":
+        names = [label.name.casefold() for label in self.labels]
+        if len(names) != len(set(names)):
+            raise ValueError("Generated custom category labels must be unique.")
+        return self
 
 
 class ApprovedAssignment(BaseModel):
@@ -255,8 +504,8 @@ class RunItemView(BaseModel):
     description: str
     source_playlists: list[str]
     source_positions: list[int]
-    suggested_moods: list[MoodLabel] = Field(default_factory=list)
-    final_moods: list[MoodLabel] = Field(default_factory=list)
+    suggested_assignments: list[CategoryAssignment] = Field(default_factory=list)
+    final_assignments: list[CategoryAssignment] = Field(default_factory=list)
     confidence: int
     reason: str
     is_music: bool
@@ -269,18 +518,37 @@ class RunItemView(BaseModel):
         if not isinstance(data, dict):
             return data
         upgraded = dict(data)
-        if "suggested_moods" not in upgraded and "suggested_mood" in upgraded:
-            legacy_suggested = upgraded.get("suggested_mood")
-            upgraded["suggested_moods"] = [] if legacy_suggested in (None, "") else [legacy_suggested]
-        if "final_moods" not in upgraded and "final_mood" in upgraded:
-            legacy_final = upgraded.get("final_mood")
-            upgraded["final_moods"] = [] if legacy_final in (None, "") else [legacy_final]
+        if "suggested_assignments" not in upgraded:
+            legacy_suggested = upgraded.get("suggested_moods", upgraded.get("suggested_mood"))
+            if legacy_suggested is not None:
+                upgraded["suggested_assignments"] = [
+                    mood_assignment_from_values(
+                        legacy_suggested,
+                        confidence=int(upgraded.get("confidence", 0) or 0),
+                        reason=str(upgraded.get("reason", "")),
+                    ).model_dump(mode="json")
+                ]
+        if "final_assignments" not in upgraded:
+            legacy_final = upgraded.get("final_moods", upgraded.get("final_mood"))
+            if legacy_final is not None:
+                upgraded["final_assignments"] = [
+                    mood_assignment_from_values(
+                        legacy_final,
+                        confidence=int(upgraded.get("confidence", 0) or 0),
+                        reason=str(upgraded.get("reason", "")),
+                    ).model_dump(mode="json")
+                ]
+        if "final_assignments" not in upgraded and "suggested_assignments" in upgraded:
+            upgraded["final_assignments"] = upgraded["suggested_assignments"]
         return upgraded
 
-    @field_validator("suggested_moods", "final_moods", mode="before")
-    @classmethod
-    def normalize_moods(cls, value: Any) -> list[MoodLabel]:
-        return normalize_mood_labels(value)
+    @property
+    def suggested_moods(self) -> list[MoodLabel]:
+        return mood_values_from_assignment(self.suggested_assignment_for(CATEGORY_SET_MOOD_ID))
+
+    @property
+    def final_moods(self) -> list[MoodLabel]:
+        return mood_values_from_assignment(self.final_assignment_for(CATEGORY_SET_MOOD_ID))
 
     @property
     def suggested_mood(self) -> MoodLabel | None:
@@ -289,6 +557,28 @@ class RunItemView(BaseModel):
     @property
     def final_mood(self) -> MoodLabel | None:
         return self.final_moods[0] if self.final_moods else None
+
+    def suggested_assignment_for(self, category_id: str) -> CategoryAssignment | None:
+        normalized = slugify_label(category_id)
+        return next((assignment for assignment in self.suggested_assignments if assignment.category_id == normalized), None)
+
+    def final_assignment_for(self, category_id: str) -> CategoryAssignment | None:
+        normalized = slugify_label(category_id)
+        return next((assignment for assignment in self.final_assignments if assignment.category_id == normalized), None)
+
+    def suggested_label_slugs(self, category_id: str) -> list[str]:
+        assignment = self.suggested_assignment_for(category_id)
+        return assignment.label_slugs if assignment is not None else []
+
+    def final_label_slugs(self, category_id: str) -> list[str]:
+        assignment = self.final_assignment_for(category_id)
+        return assignment.label_slugs if assignment is not None else []
+
+    def suggested_label_names(self, category: CategorySetDefinition) -> list[str]:
+        return category.label_names_for_slugs(self.suggested_label_slugs(category.id))
+
+    def final_label_names(self, category: CategorySetDefinition) -> list[str]:
+        return category.label_names_for_slugs(self.final_label_slugs(category.id))
 
 
 class RunSummary(BaseModel):
@@ -307,7 +597,19 @@ class RunDetail(BaseModel):
     created_at: str
     summary: RunSummary
     items: list[RunItemView]
+    category_sets: list[CategorySetDefinition] = Field(default_factory=lambda: [default_mood_category_set()])
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_legacy_category_sets(cls, data: Any) -> Any:
+        if isinstance(data, dict) and not data.get("category_sets"):
+            data = dict(data)
+            data["category_sets"] = [default_mood_category_set().model_dump(mode="json")]
+        return data
 
     @property
     def mood_labels(self) -> list[str]:
         return list(MOOD_LABELS)
+
+    def category_for_id(self, category_id: str) -> CategorySetDefinition | None:
+        return find_category_set(self.category_sets, category_id)

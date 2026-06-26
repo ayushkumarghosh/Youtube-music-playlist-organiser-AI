@@ -17,15 +17,22 @@ from googleapiclient.errors import HttpError
 
 from app.constants import (
     APP_MANAGED_MARKER,
-    APP_PLAYLIST_PREFIX,
     APP_NAME,
+    APP_PLAYLIST_PREFIX,
     LEGACY_APP_MANAGED_MARKERS,
-    MOOD_LABELS,
     PLAYLIST_ITEMS_PAGE_SIZE,
     YOUTUBE_API_RETRY_ATTEMPTS,
 )
 from app.db import Database
-from app.models import PlaylistItemRecord, PlaylistSummary, RunScope, SetupSettings
+from app.models import (
+    CategorySetDefinition,
+    PlaylistItemRecord,
+    PlaylistSummary,
+    RunScope,
+    SetupSettings,
+    default_mood_category_set,
+    slugify_label,
+)
 
 
 GOOGLE_SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
@@ -51,16 +58,27 @@ def build_managed_playlist_title(scope: RunScope, mood: str, source_playlist_tit
     return mood
 
 
-def build_managed_playlist_description(scope: RunScope, mood: str, source_playlist_title: str | None = None) -> str:
+def build_managed_playlist_description(
+    scope: RunScope,
+    mood: str,
+    source_playlist_title: str | None = None,
+    category_set: CategorySetDefinition | None = None,
+    label_slug: str | None = None,
+) -> str:
     if scope == RunScope.ALL_PLAYLISTS:
         source_label = "All playlists"
     elif scope == RunScope.SELECTED_PLAYLISTS:
         source_label = source_playlist_title or "Selected playlists"
     else:
         source_label = source_playlist_title or "Selected playlist"
+    category_set = category_set or default_mood_category_set()
+    label_slug = label_slug or slugify_label(mood)
+    legacy_mood = f" Mood: {mood}." if category_set.id == "mood" else ""
     return (
         f"{APP_MANAGED_MARKER} Managed by {APP_NAME}. "
-        f"Scope: {source_label}. Mood: {mood}."
+        f"Category: {category_set.name}. Category ID: {category_set.id}. "
+        f"Label: {mood}. Label slug: {label_slug}. "
+        f"Scope: {source_label}.{legacy_mood}"
     )
 
 
@@ -73,6 +91,33 @@ def extract_managed_playlist_mood(title: str, description: str = "") -> str | No
             return mood_text[:-1] if mood_text.endswith(".") else mood_text
     if title.startswith(f"{APP_PLAYLIST_PREFIX} [") and " - " in title:
         return title.rsplit(" - ", 1)[-1].strip() or None
+    return None
+
+
+def _extract_description_value(description: str, marker: str) -> str | None:
+    start = description.find(marker)
+    if start == -1:
+        return None
+    start += len(marker)
+    end = description.find(".", start)
+    value = description[start:end if end != -1 else None].strip()
+    return value or None
+
+
+def extract_managed_playlist_category_key(title: str, description: str = "") -> str | None:
+    if any(marker in description for marker in [APP_MANAGED_MARKER, *LEGACY_APP_MANAGED_MARKERS]):
+        category_id = _extract_description_value(description, "Category ID: ")
+        label_slug = _extract_description_value(description, "Label slug: ")
+        if category_id and label_slug:
+            return f"{slugify_label(category_id)}:{slugify_label(label_slug)}"
+        legacy_mood = extract_managed_playlist_mood(title, description)
+        if legacy_mood:
+            mood_label = default_mood_category_set().label_for_slug(legacy_mood)
+            return f"mood:{mood_label.slug if mood_label else slugify_label(legacy_mood)}"
+    legacy_mood = extract_managed_playlist_mood(title, description)
+    if legacy_mood:
+        mood_label = default_mood_category_set().label_for_slug(legacy_mood)
+        return f"mood:{mood_label.slug if mood_label else slugify_label(legacy_mood)}"
     return None
 
 
@@ -261,68 +306,78 @@ class YouTubeService:
         self,
         scope: RunScope,
         source_playlist_title: str | None,
+        category_sets: list[CategorySetDefinition] | None = None,
     ) -> dict[str, PlaylistSummary]:
+        category_sets = category_sets or [default_mood_category_set()]
         youtube = self._client()
-        existing_by_mood: dict[str, PlaylistSummary] = {}
+        existing_by_key: dict[str, PlaylistSummary] = {}
         for playlist in self.list_playlists(include_managed=True):
             if not is_managed_playlist(playlist.title, playlist.description):
                 continue
-            mood = extract_managed_playlist_mood(playlist.title, playlist.description)
-            if mood and mood not in existing_by_mood:
-                existing_by_mood[mood] = playlist
+            key = extract_managed_playlist_category_key(playlist.title, playlist.description)
+            if key and key not in existing_by_key:
+                existing_by_key[key] = playlist
         result: dict[str, PlaylistSummary] = {}
-        for mood in MOOD_LABELS:
-            title = build_managed_playlist_title(scope, mood, source_playlist_title)
-            description = build_managed_playlist_description(scope, mood, source_playlist_title)
-            playlist = existing_by_mood.get(mood)
-            if playlist is None:
-                response = self._execute_request(
-                    lambda: youtube.playlists().insert(
-                        part="snippet,status",
-                        body={
-                            "snippet": {
-                                "title": title,
-                                "description": description,
+        for category_set in category_sets:
+            for label in category_set.labels:
+                key = f"{category_set.id}:{label.slug}"
+                title = build_managed_playlist_title(scope, label.name, source_playlist_title)
+                description = build_managed_playlist_description(
+                    scope,
+                    label.name,
+                    source_playlist_title,
+                    category_set,
+                    label.slug,
+                )
+                playlist = existing_by_key.get(key)
+                if playlist is None:
+                    response = self._execute_request(
+                        lambda: youtube.playlists().insert(
+                            part="snippet,status",
+                            body={
+                                "snippet": {
+                                    "title": title,
+                                    "description": description,
+                                },
+                                "status": {"privacyStatus": "private"},
                             },
-                            "status": {"privacyStatus": "private"},
-                        },
-                    ),
-                    f"creating managed playlist '{title}'",
-                )
-                playlist = PlaylistSummary(
-                    playlist_id=response["id"],
-                    title=response["snippet"]["title"],
-                    description=response["snippet"].get("description", ""),
-                    privacy_status=response["status"].get("privacyStatus", ""),
-                    item_count=response.get("contentDetails", {}).get("itemCount", 0),
-                )
-            elif (
-                playlist.title != title
-                or playlist.description != description
-                or playlist.privacy_status != "private"
-            ):
-                response = self._execute_request(
-                    lambda: youtube.playlists().update(
-                        part="snippet,status",
-                        body={
-                            "id": playlist.playlist_id,
-                            "snippet": {
-                                "title": title,
-                                "description": description,
+                        ),
+                        f"creating managed playlist '{title}'",
+                    )
+                    playlist = PlaylistSummary(
+                        playlist_id=response["id"],
+                        title=response["snippet"]["title"],
+                        description=response["snippet"].get("description", ""),
+                        privacy_status=response["status"].get("privacyStatus", ""),
+                        item_count=response.get("contentDetails", {}).get("itemCount", 0),
+                    )
+                elif (
+                    playlist.title != title
+                    or playlist.description != description
+                    or playlist.privacy_status != "private"
+                ):
+                    response = self._execute_request(
+                        lambda: youtube.playlists().update(
+                            part="snippet,status",
+                            body={
+                                "id": playlist.playlist_id,
+                                "snippet": {
+                                    "title": title,
+                                    "description": description,
+                                },
+                                "status": {"privacyStatus": "private"},
                             },
-                            "status": {"privacyStatus": "private"},
-                        },
-                    ),
-                    f"updating managed playlist '{playlist.playlist_id}'",
-                )
-                playlist = PlaylistSummary(
-                    playlist_id=response["id"],
-                    title=response["snippet"]["title"],
-                    description=response["snippet"].get("description", ""),
-                    privacy_status=response["status"].get("privacyStatus", ""),
-                    item_count=response.get("contentDetails", {}).get("itemCount", playlist.item_count),
-                )
-            result[mood] = playlist
+                        ),
+                        f"updating managed playlist '{playlist.playlist_id}'",
+                    )
+                    playlist = PlaylistSummary(
+                        playlist_id=response["id"],
+                        title=response["snippet"]["title"],
+                        description=response["snippet"].get("description", ""),
+                        privacy_status=response["status"].get("privacyStatus", ""),
+                        item_count=response.get("contentDetails", {}).get("itemCount", playlist.item_count),
+                    )
+                result[key] = playlist
         return result
 
     def reconcile_playlist(

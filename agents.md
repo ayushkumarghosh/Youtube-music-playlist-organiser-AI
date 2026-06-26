@@ -72,7 +72,7 @@ python -m pytest
 
 When changing the UI:
 
-1. Create a mockup for the intended UI change if it is a major change.
+1. Generate a mockup image for the intended UI change if it is a major change.
 2. Test the change by running the app and taking screenshots of the changed screens.
 3. Fix the implementation if the UI does not match the mockup. Generated text does not need to match exactly.
 4. Repeat steps 2 and 3 until the UI matches the mockup.

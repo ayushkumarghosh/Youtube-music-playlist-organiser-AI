@@ -2,8 +2,8 @@
 {% block content %}
   <div class="workspace-heading">
     <div>
-      <h2>Choose playlists</h2>
-      <p>Select one or more source playlists to classify. Managed mood playlists are skipped automatically.</p>
+      <h2>Choose playlists and categories</h2>
+      <p>Select source playlists, then choose the category sets VibeShelf should use for classification.</p>
     </div>
     <form action="/auth/google/disconnect" method="post">
       <button type="submit" class="secondary-action">Disconnect YouTube</button>
@@ -30,7 +30,7 @@
       method="post"
       class="playlist-picker-form"
       data-loading-title="Generating preview..."
-      data-loading-message="Fetching playlists, classifying songs, and preparing the review screen."
+      data-loading-message="Fetching playlists, classifying songs by category, and preparing the review screen."
     >
       <input type="hidden" name="scope" value="selected_playlists">
 
@@ -71,11 +71,154 @@
         </div>
       {% endif %}
 
+      <div class="category-picker">
+        <div class="picker-toolbar compact-toolbar">
+          <div class="section-heading">
+            <h2>Playlist categories</h2>
+            <p><span data-category-count>1</span> category set selected.</p>
+          </div>
+        </div>
+        <div class="category-select-grid" data-category-grid>
+          {% for category in built_in_category_sets %}
+            <label class="category-select-card">
+              <input
+                type="checkbox"
+                name="category_ids"
+                value="{{ category.id }}"
+                data-category-checkbox
+                {% if category.id == "mood" %}checked{% endif %}
+              >
+              <span class="playlist-check" aria-hidden="true"></span>
+              <span class="playlist-card-main">
+                <strong>{{ category.name }}</strong>
+                <span>{{ category.labels|length }} playlist types</span>
+              </span>
+            </label>
+          {% endfor %}
+          {% for category in custom_category_sets %}
+            <label class="category-select-card custom-category-card">
+              <input type="checkbox" name="category_ids" value="{{ category.id }}" data-category-checkbox>
+              <span class="playlist-check" aria-hidden="true"></span>
+              <span class="playlist-card-main">
+                <strong>{{ category.name }}</strong>
+                <span>Custom · {{ category.labels|length }} playlist types</span>
+              </span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+
       <div class="picker-actions">
         <button type="submit" data-preview-submit disabled>
-          Preview mood assignment
+          Preview category assignments
         </button>
       </div>
     </form>
   </section>
+
+  <section class="panel custom-category-panel">
+    <div class="section-heading">
+      <h2>Custom category builder</h2>
+      <p>Describe a playlist system, let AI propose labels, then edit and save it for reuse.</p>
+    </div>
+
+    <form
+      action="/categories/custom/propose"
+      method="post"
+      class="custom-category-form"
+      data-loading-title="Creating playlist labels..."
+      data-loading-message="Generating editable custom playlist types from your prompt."
+    >
+      <label>
+        <span>Category name</span>
+        <input type="text" name="category_name" value="{{ custom_proposal.name if custom_proposal else '' }}" placeholder="Example: Listening Intent" required>
+      </label>
+      <label>
+        <span>Free-form prompt</span>
+        <textarea name="category_prompt" rows="4" placeholder="Example: Create playlists for why I might play a song: background, singing along, discovery, nostalgia, deep focus." required>{{ custom_proposal.prompt if custom_proposal else '' }}</textarea>
+      </label>
+      <label>
+        <span>Target playlist count</span>
+        <input type="number" name="target_count" min="2" max="12" value="{{ custom_proposal.target_count if custom_proposal else 6 }}" required>
+      </label>
+      <div class="form-actions">
+        <button type="submit">Generate labels</button>
+      </div>
+    </form>
+
+    {% if custom_proposal %}
+      <form action="/categories/custom/save" method="post" class="custom-label-editor">
+        <input type="hidden" name="category_name" value="{{ custom_proposal.name }}">
+        <input type="hidden" name="category_prompt" value="{{ custom_proposal.prompt }}">
+        <div class="inline-heading">
+          <div class="section-heading">
+            <h2>Review generated labels</h2>
+            <p>Edit names or guidance before saving this category.</p>
+          </div>
+          <button type="submit">Save custom category</button>
+        </div>
+        <div class="custom-label-grid">
+          {% for label in custom_proposal.labels %}
+            <div class="custom-label-row">
+              <label>
+                <span>Playlist label</span>
+                <input type="text" name="label_name" value="{{ label.name }}" required>
+              </label>
+              <label>
+                <span>Guidance</span>
+                <input type="text" name="label_description" value="{{ label.description }}">
+              </label>
+            </div>
+          {% endfor %}
+        </div>
+      </form>
+    {% endif %}
+  </section>
+
+  {% if custom_category_sets %}
+    <section class="panel custom-category-panel">
+      <div class="section-heading">
+        <h2>Saved custom categories</h2>
+        <p>Edit labels directly or archive a category you no longer use.</p>
+      </div>
+      <div class="saved-category-list">
+        {% for category in custom_category_sets %}
+          <div class="saved-category">
+            <form action="/categories/custom/save" method="post" class="saved-category-form">
+              <input type="hidden" name="category_id" value="{{ category.id }}">
+              <label>
+                <span>Category name</span>
+                <input type="text" name="category_name" value="{{ category.name }}" required>
+              </label>
+              <label>
+                <span>Prompt</span>
+                <textarea name="category_prompt" rows="3" required>{{ category.prompt }}</textarea>
+              </label>
+              <div class="custom-label-grid">
+                {% for label in category.labels %}
+                  <div class="custom-label-row">
+                    <label>
+                      <span>Playlist label</span>
+                      <input type="text" name="label_name" value="{{ label.name }}" required>
+                    </label>
+                    <label>
+                      <span>Guidance</span>
+                      <input type="text" name="label_description" value="{{ label.description }}">
+                    </label>
+                  </div>
+                {% endfor %}
+              </div>
+              <div class="form-actions">
+                <button type="submit">Update</button>
+              </div>
+            </form>
+            <form action="/categories/custom/archive" method="post">
+              <input type="hidden" name="category_id" value="{{ category.id }}">
+              <button type="submit" class="secondary-action">Archive</button>
+            </form>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
 {% endblock %}

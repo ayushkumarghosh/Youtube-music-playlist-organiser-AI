@@ -19,8 +19,8 @@
         <strong>{{ run.summary.default_included_count }}</strong>
       </div>
       <div class="metric">
-        <span>Excluded</span>
-        <strong>{{ run.summary.excluded_count }}</strong>
+        <span>Categories</span>
+        <strong>{{ run.category_sets|length }}</strong>
       </div>
     </div>
 
@@ -40,7 +40,7 @@
       data-progress-form
       data-progress-start-url="/runs/apply/start"
       data-loading-title="Syncing to YouTube..."
-      data-loading-message="Creating or updating mood playlists and applying your reviewed assignments."
+      data-loading-message="Creating or updating category playlists and applying your reviewed assignments."
     >
       <input type="hidden" name="run_id" value="{{ run.run_id }}">
       <input type="hidden" name="run_state" value="{{ run_state }}">
@@ -48,7 +48,7 @@
       <div class="review-toolbar">
         <div class="section-heading">
           <h2>Review assignments</h2>
-          <p>Search, adjust mood chips, then sync the final set.</p>
+          <p>Search, adjust category labels, then sync the final set.</p>
         </div>
         <div class="toolbar-actions">
           <input type="search" id="filter-input" placeholder="Search songs, artists, playlists" data-row-filter>
@@ -63,10 +63,9 @@
             <tr>
               <th>Song</th>
               <th>Source</th>
-              <th>Model</th>
               <th>Confidence</th>
               <th>Reason</th>
-              <th>Final moods</th>
+              <th>Final categories</th>
             </tr>
           </thead>
           <tbody>
@@ -84,21 +83,35 @@
                     <div>{{ source }}{% if item.source_positions|length > loop.index0 %} &middot; #{{ item.source_positions[loop.index0] + 1 }}{% endif %}</div>
                   {% endfor %}
                 </td>
-                <td>{{ item.suggested_moods|join(", ") or "Not classified as music" }}</td>
                 <td>
                   <span class="confidence">{{ item.confidence }}</span>
                 </td>
                 <td class="reason-cell">{{ item.reason }}</td>
-                <td>
-                  <input type="hidden" name="mood__{{ item.video_id }}" value="">
-                  <div class="mood-options">
-                    {% for mood in mood_labels %}
-                      <label class="mood-option">
-                        <input type="checkbox" name="mood__{{ item.video_id }}" value="{{ mood }}" {% if mood in item.final_moods %}checked{% endif %}>
-                        <span>{{ mood }}</span>
-                      </label>
-                    {% endfor %}
-                  </div>
+                <td class="assignment-cell">
+                  {% for category in run.category_sets %}
+                    {% set suggested_names = item.suggested_label_names(category) %}
+                    {% set final_slugs = item.final_label_slugs(category.id) %}
+                    <div class="assignment-group">
+                      <div class="assignment-group-heading">
+                        <strong>{{ category.name }}</strong>
+                        <span>{{ suggested_names|join(", ") or "No model label" }}</span>
+                      </div>
+                      <input type="hidden" name="assignment__{{ category.id }}__{{ item.video_id }}" value="">
+                      <div class="mood-options category-options">
+                        {% for label in category.labels %}
+                          <label class="mood-option">
+                            <input
+                              type="checkbox"
+                              name="assignment__{{ category.id }}__{{ item.video_id }}"
+                              value="{{ label.slug }}"
+                              {% if label.slug in final_slugs %}checked{% endif %}
+                            >
+                            <span>{{ label.name }}</span>
+                          </label>
+                        {% endfor %}
+                      </div>
+                    </div>
+                  {% endfor %}
                 </td>
               </tr>
             {% endfor %}

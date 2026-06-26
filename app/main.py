@@ -16,9 +16,17 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import RuntimePaths, ensure_data_dir
-from app.constants import APP_NAME, MOOD_LABELS, SESSION_SECRET_DEFAULT
+from app.constants import APP_NAME, CUSTOM_CATEGORY_ID_PREFIX, MOOD_LABELS, SESSION_SECRET_DEFAULT
 from app.db import Database
-from app.models import RunDetail, RunScope
+from app.models import (
+    CategoryLabelDefinition,
+    CategorySetDefinition,
+    RunDetail,
+    RunScope,
+    built_in_category_sets,
+    default_mood_category_set,
+    slugify_label,
+)
 from app.security import EncryptedStateError, decrypt_json, encrypt_json
 from app.services.azure_openai import AzureClassificationError, AzureOpenAIClassifier
 from app.services.organizer import OrganizerService
@@ -163,14 +171,91 @@ def clear_apply_jobs() -> None:
         apply_jobs.clear()
 
 
-def parse_mood_overrides(form) -> dict[str, list[str]]:
-    overrides: dict[str, list[str]] = {}
+def parse_assignment_overrides(form) -> dict[str, dict[str, list[str]]]:
+    overrides: dict[str, dict[str, list[str]]] = {}
     for key, value in form.multi_items():
-        if not key.startswith("mood__"):
-            continue
-        video_id = key.replace("mood__", "", 1)
-        overrides.setdefault(video_id, []).append(str(value).strip())
+        value = str(value).strip()
+        if key.startswith("assignment__"):
+            parts = key.split("__", 2)
+            if len(parts) != 3 or not value:
+                continue
+            _, category_id, video_id = parts
+            overrides.setdefault(slugify_label(category_id), {}).setdefault(video_id, []).append(slugify_label(value))
+        elif key.startswith("mood__"):
+            video_id = key.replace("mood__", "", 1)
+            if value:
+                overrides.setdefault("mood", {}).setdefault(video_id, []).append(slugify_label(value))
     return overrides
+
+
+def parse_mood_overrides(form) -> dict[str, dict[str, list[str]]]:
+    return parse_assignment_overrides(form)
+
+
+def available_category_sets() -> list[CategorySetDefinition]:
+    return [*built_in_category_sets(), *db.list_custom_category_sets(include_archived=False)]
+
+
+def resolve_category_sets(category_ids: list[str]) -> list[CategorySetDefinition]:
+    normalized_ids = [slugify_label(category_id) for category_id in category_ids if category_id.strip()]
+    if not normalized_ids:
+        normalized_ids = [default_mood_category_set().id]
+    available = {category.id: category for category in available_category_sets()}
+    category_sets = []
+    for category_id in dict.fromkeys(normalized_ids):
+        category = available.get(category_id)
+        if category is None:
+            raise HTTPException(status_code=400, detail=f"Unknown category set: {category_id}")
+        category_sets.append(category)
+    if not category_sets:
+        raise HTTPException(status_code=400, detail="Choose at least one category set.")
+    return category_sets
+
+
+def custom_category_id(name: str) -> str:
+    return f"{CUSTOM_CATEGORY_ID_PREFIX}{slugify_label(name)}-{uuid.uuid4().hex[:8]}"
+
+
+def parse_target_count(raw: str | int) -> int:
+    try:
+        target_count = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Target playlist count must be a number from 2 to 12.") from exc
+    if target_count < 2 or target_count > 12:
+        raise ValueError("Target playlist count must be between 2 and 12.")
+    return target_count
+
+
+def build_custom_category(
+    *,
+    category_id: str,
+    name: str,
+    prompt: str,
+    label_names: list[str],
+    label_descriptions: list[str],
+) -> CategorySetDefinition:
+    labels: list[CategoryLabelDefinition] = []
+    seen_slugs: set[str] = set()
+    for index, label_name in enumerate(label_names):
+        label_name = label_name.strip()
+        if not label_name:
+            continue
+        slug = slugify_label(label_name)
+        if slug in seen_slugs:
+            raise ValueError("Custom playlist labels must be unique.")
+        seen_slugs.add(slug)
+        description = label_descriptions[index].strip() if index < len(label_descriptions) else ""
+        labels.append(CategoryLabelDefinition(slug=slug, name=label_name, description=description))
+    if len(labels) < 2:
+        raise ValueError("Save at least two custom playlist labels.")
+    return CategorySetDefinition(
+        id=category_id or custom_category_id(name),
+        name=name,
+        description="Custom playlist category.",
+        labels=labels,
+        source="custom",
+        prompt=prompt,
+    )
 
 
 def run_apply_job(
@@ -180,7 +265,7 @@ def run_apply_job(
     token_payload: dict[str, Any] | None,
     run_id: str,
     run_state: str,
-    overrides: dict[str, list[str]],
+    overrides: dict[str, dict[str, list[str]]],
 ) -> None:
     def report(progress: dict[str, object]) -> None:
         update_apply_job(
@@ -208,7 +293,7 @@ def run_apply_job(
             job_id,
             status="complete",
             stage="complete",
-            message="Mood playlists synced",
+            message="Category playlists synced",
             current=1,
             total=1,
             percent=100,
@@ -243,6 +328,7 @@ def render_run_detail(request: Request, run: RunDetail, status_code: int = 200):
             "run": run,
             "run_state": encrypted_run_state(run),
             "mood_labels": MOOD_LABELS,
+            "category_sets": run.category_sets,
         },
         status_code=status_code,
     )
@@ -261,7 +347,7 @@ def get_login_context(request: Request) -> dict[str, Any]:
     }
 
 
-def get_preview_context(request: Request) -> dict[str, Any]:
+def get_preview_context(request: Request, custom_proposal: dict[str, Any] | None = None) -> dict[str, Any]:
     settings = settings_service.get_settings()
     token_payload = google_token_payload(request)
     playlists = []
@@ -282,6 +368,9 @@ def get_preview_context(request: Request) -> dict[str, Any]:
         "playlists": playlists,
         "run_scopes": list(RunScope),
         "mood_labels": MOOD_LABELS,
+        "built_in_category_sets": built_in_category_sets(),
+        "custom_category_sets": db.list_custom_category_sets(include_archived=False),
+        "custom_proposal": custom_proposal,
     }
 
 
@@ -390,6 +479,82 @@ def google_disconnect(request: Request):
     return response
 
 
+@app.post("/categories/custom/propose")
+def propose_custom_category(
+    request: Request,
+    category_name: str = Form(""),
+    category_prompt: str = Form(""),
+    target_count: str = Form("6"),
+):
+    settings = settings_service.get_settings()
+    if not settings.is_complete():
+        set_flash(request, "Set all required environment variables before creating custom categories.", "error")
+        return RedirectResponse(url="/", status_code=303)
+    name = category_name.strip()
+    prompt = category_prompt.strip()
+    if not name or not prompt:
+        set_flash(request, "Custom categories need a name and prompt.", "error")
+        return RedirectResponse(url="/preview", status_code=303)
+    try:
+        parsed_target_count = parse_target_count(target_count)
+        proposal = AzureOpenAIClassifier(settings, db).propose_custom_category_labels(
+            name,
+            prompt,
+            parsed_target_count,
+        )
+    except (ValueError, AzureClassificationError) as exc:
+        set_flash(request, str(exc), "error")
+        return RedirectResponse(url="/preview", status_code=303)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="preview.html",
+        context=get_preview_context(
+            request,
+            custom_proposal={
+                "name": name,
+                "prompt": prompt,
+                "target_count": parsed_target_count,
+                "labels": proposal.labels,
+            },
+        ),
+    )
+
+
+@app.post("/categories/custom/save")
+async def save_custom_category(request: Request):
+    form = await request.form()
+    name = str(form.get("category_name", "")).strip()
+    prompt = str(form.get("category_prompt", "")).strip()
+    category_id = str(form.get("category_id", "")).strip()
+    label_names = [str(value).strip() for value in form.getlist("label_name")]
+    label_descriptions = [str(value).strip() for value in form.getlist("label_description")]
+    if not name or not prompt:
+        set_flash(request, "Custom categories need a name and prompt.", "error")
+        return RedirectResponse(url="/preview", status_code=303)
+    try:
+        category = build_custom_category(
+            category_id=category_id,
+            name=name,
+            prompt=prompt,
+            label_names=label_names,
+            label_descriptions=label_descriptions,
+        )
+        db.save_custom_category_set(category)
+    except ValueError as exc:
+        set_flash(request, str(exc), "error")
+        return RedirectResponse(url="/preview", status_code=303)
+    set_flash(request, f"Custom category '{category.name}' saved.", "success")
+    return RedirectResponse(url="/preview", status_code=303)
+
+
+@app.post("/categories/custom/archive")
+def archive_custom_category(category_id: str = Form("")):
+    if category_id:
+        db.archive_custom_category_set(slugify_label(category_id))
+    return RedirectResponse(url="/preview", status_code=303)
+
+
 @app.get("/auth/google/callback", name="google_callback")
 def google_callback(request: Request, code: str | None = None, state: str | None = None):
     expected_state = request.session.get("google_oauth_state")
@@ -419,6 +584,7 @@ def preview_run(
     scope: str = Form("selected_playlists"),
     selected_playlist_id: str = Form(""),
     selected_playlist_ids: list[str] = Form(default=[]),
+    category_ids: list[str] = Form(default=[]),
 ):
     settings = settings_service.get_settings()
     if not settings.is_complete():
@@ -442,15 +608,25 @@ def preview_run(
     if run_scope == RunScope.SINGLE_PLAYLIST and not selected_playlist_id:
         set_flash(request, "Choose a playlist before generating a preview.", "error")
         return RedirectResponse(url="/preview", status_code=303)
+    category_sets = resolve_category_sets(category_ids)
     classifier = AzureOpenAIClassifier(settings, db)
     organizer = OrganizerService(db, youtube_service, classifier)
     try:
-        run = organizer.create_preview(
-            run_scope,
-            selected_playlist_id or None,
-            source_playlist_ids=selected_playlist_ids,
-            persist=False,
-        )
+        try:
+            run = organizer.create_preview(
+                run_scope,
+                selected_playlist_id or None,
+                source_playlist_ids=selected_playlist_ids,
+                persist=False,
+                category_sets=category_sets,
+            )
+        except TypeError:
+            run = organizer.create_preview(
+                run_scope,
+                selected_playlist_id or None,
+                source_playlist_ids=selected_playlist_ids,
+                persist=False,
+            )
     except AzureClassificationError as exc:
         set_flash(request, f"Preview failed during song classification: {exc}", "error")
         return RedirectResponse(url="/preview", status_code=303)
@@ -483,6 +659,7 @@ def run_detail(request: Request, run_id: str):
             "run": run,
             "run_state": encrypted_run_state(run),
             "mood_labels": MOOD_LABELS,
+            "category_sets": run.category_sets,
         },
     )
 
@@ -494,7 +671,7 @@ async def apply_run(request: Request):
     run_state = str(form.get(RUN_STATE_FIELD, "")).strip()
     if not run_id and not run_state:
         raise HTTPException(status_code=400, detail="run_id or run_state is required.")
-    overrides = parse_mood_overrides(form)
+    overrides = parse_assignment_overrides(form)
     settings = settings_service.get_settings()
     token_payload = google_token_payload(request)
     youtube_service = YouTubeService(settings, db, token_payload)
@@ -542,7 +719,7 @@ async def start_apply_run(request: Request):
         token_payload=token_payload,
         run_id=run_id,
         run_state=run_state,
-        overrides=parse_mood_overrides(form),
+        overrides=parse_assignment_overrides(form),
     )
     return JSONResponse({"job_id": job.job_id, "status_url": f"/runs/apply/status/{job.job_id}"})
 

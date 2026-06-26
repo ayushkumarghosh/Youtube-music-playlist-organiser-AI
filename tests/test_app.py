@@ -180,7 +180,12 @@ def test_preview_workspace_renders_playlists_and_preview_form(monkeypatch: pytes
     assert 'data-select-all-playlists' in response.text
     assert "<select" not in response.text
     assert 'data-loading-title="Generating preview..."' in response.text
-    assert "Fetching playlists, classifying songs, and preparing the review screen." in response.text
+    assert "Fetching playlists, classifying songs by category, and preparing the review screen." in response.text
+    assert "Playlist categories" in response.text
+    assert 'name="category_ids"' in response.text
+    assert "Mood" in response.text
+    assert "Activity" in response.text
+    assert "Custom category builder" in response.text
 
 
 def test_finish_page_requires_connection(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -222,7 +227,7 @@ def test_finish_page_renders_start_over_action(monkeypatch: pytest.MonkeyPatch) 
     response = client.get("/finish")
 
     assert response.status_code == 200
-    assert "Moods applied" in response.text
+    assert "Categories applied" in response.text
     assert "Start once more" in response.text
     assert 'href="/preview"' in response.text
     assert "reloads the playlist list" in response.text
@@ -405,9 +410,17 @@ def test_preview_classification_error_redirects(monkeypatch: pytest.MonkeyPatch)
         def __init__(self, db, youtube_service, classifier):
             pass
 
-        def create_preview(self, scope, source_playlist_id=None, source_playlist_ids=None, persist=True):
+        def create_preview(
+            self,
+            scope,
+            source_playlist_id=None,
+            source_playlist_ids=None,
+            persist=True,
+            category_sets=None,
+        ):
             assert scope == RunScope.SELECTED_PLAYLISTS
             assert source_playlist_ids == ["playlist-1"]
+            assert category_sets[0].id == "mood"
             raise AzureClassificationError("mock classification failure")
 
     monkeypatch.setattr("app.main.settings_service", FakeSettingsService())
@@ -453,7 +466,7 @@ def test_apply_sync_error_redirects(monkeypatch: pytest.MonkeyPatch) -> None:
     client = TestClient(app)
     response = client.post(
         "/runs/apply",
-        data={"run_id": "run-123", "mood__video-1": "Happy / Feel-good"},
+        data={"run_id": "run-123", "assignment__mood__video-1": "happy-feel-good"},
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -481,7 +494,7 @@ def test_apply_success_redirects_to_finish(monkeypatch: pytest.MonkeyPatch) -> N
 
         def apply_run(self, run_id, overrides):
             assert run_id == "run-123"
-            assert overrides["video-1"] == ["Happy / Feel-good"]
+            assert overrides["mood"]["video-1"] == ["happy-feel-good"]
             return {"total_assignments": 1, "playlists": {}}
 
     monkeypatch.setattr("app.main.settings_service", FakeSettingsService())
@@ -491,7 +504,7 @@ def test_apply_success_redirects_to_finish(monkeypatch: pytest.MonkeyPatch) -> N
     client = TestClient(app)
     response = client.post(
         "/runs/apply",
-        data={"run_id": "run-123", "mood__video-1": "Happy / Feel-good"},
+        data={"run_id": "run-123", "assignment__mood__video-1": "happy-feel-good"},
         follow_redirects=False,
     )
 
@@ -521,9 +534,17 @@ def test_preview_response_includes_apply_loading_metadata(monkeypatch: pytest.Mo
         def __init__(self, db, youtube_service, classifier):
             pass
 
-        def create_preview(self, scope, source_playlist_id=None, source_playlist_ids=None, persist=True):
+        def create_preview(
+            self,
+            scope,
+            source_playlist_id=None,
+            source_playlist_ids=None,
+            persist=True,
+            category_sets=None,
+        ):
             assert scope == RunScope.SELECTED_PLAYLISTS
             assert source_playlist_ids == ["playlist-1", "playlist-2"]
+            assert category_sets[0].id == "mood"
             return RunDetail(
                 run_id="run-123",
                 status=RunStatus.PREVIEWED,
@@ -571,7 +592,7 @@ def test_preview_response_includes_apply_loading_metadata(monkeypatch: pytest.Mo
     assert "data-progress-form" in response.text
     assert 'data-progress-start-url="/runs/apply/start"' in response.text
     assert 'data-loading-title="Syncing to YouTube..."' in response.text
-    assert "Creating or updating mood playlists and applying your reviewed assignments." in response.text
+    assert "Creating or updating category playlists and applying your reviewed assignments." in response.text
 
 
 def test_apply_start_returns_job_and_status_completes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -620,7 +641,7 @@ def test_apply_start_returns_job_and_status_completes(monkeypatch: pytest.Monkey
     client = TestClient(app)
     response = client.post(
         "/runs/apply/start",
-        data={"run_id": "run-123", "mood__video-1": "Happy / Feel-good"},
+        data={"run_id": "run-123", "assignment__mood__video-1": "happy-feel-good"},
     )
 
     assert response.status_code == 200

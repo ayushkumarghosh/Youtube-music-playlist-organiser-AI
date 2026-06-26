@@ -153,21 +153,27 @@ function bindRowFilter() {
 
 function bindPlaylistPicker() {
   const checkboxes = Array.from(document.querySelectorAll("[data-playlist-checkbox]"));
+  const categoryCheckboxes = Array.from(document.querySelectorAll("[data-category-checkbox]"));
   const selectAll = document.querySelector("[data-select-all-playlists]");
   const count = document.querySelector("[data-selection-count]");
+  const categoryCount = document.querySelector("[data-category-count]");
   const submit = document.querySelector("[data-preview-submit]");
 
-  if (!checkboxes.length) {
+  if (!checkboxes.length && !categoryCheckboxes.length) {
     return;
   }
 
   const update = () => {
     const selectedCount = checkboxes.filter((checkbox) => checkbox.checked).length;
+    const selectedCategoryCount = categoryCheckboxes.filter((checkbox) => checkbox.checked).length;
     if (count) {
       count.textContent = String(selectedCount);
     }
+    if (categoryCount) {
+      categoryCount.textContent = String(selectedCategoryCount);
+    }
     if (submit) {
-      submit.disabled = selectedCount === 0;
+      submit.disabled = selectedCount === 0 || selectedCategoryCount === 0;
     }
     if (selectAll) {
       selectAll.textContent = selectedCount === checkboxes.length ? "Clear selection" : "Select all playlists";
@@ -175,6 +181,9 @@ function bindPlaylistPicker() {
   };
 
   checkboxes.forEach((checkbox) => {
+    checkbox.addEventListener("change", update);
+  });
+  categoryCheckboxes.forEach((checkbox) => {
     checkbox.addEventListener("change", update);
   });
 

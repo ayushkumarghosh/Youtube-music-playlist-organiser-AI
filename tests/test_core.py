@@ -9,8 +9,13 @@ import pytest
 
 from app.db import Database
 from app.models import (
+    BatchCategoryClassificationItem,
+    BatchCategoryClassificationResponse,
     BatchMoodClassificationItem,
     BatchMoodClassificationResponse,
+    CategoryAssignment,
+    CategoryLabelDefinition,
+    CategorySetDefinition,
     MoodClassification,
     MoodLabel,
     PlaylistItemRecord,
@@ -18,6 +23,8 @@ from app.models import (
     RunStatus,
     SetupSettings,
     SongCandidate,
+    SongCategoryClassification,
+    built_in_category_sets,
 )
 from app.security import EncryptedStateError, decrypt_json, encrypt_json
 from app.services.settings import SettingsService
@@ -340,7 +347,8 @@ def test_batch_request_kwargs_use_canonical_responses_shape(tmp_path: Path) -> N
     assert kwargs["text"] == {"verbosity": "low"}
     assert kwargs["truncation"] == "disabled"
     assert kwargs["store"] is False
-    assert kwargs["text_format"] is BatchMoodClassificationResponse
+    assert kwargs["text_format"] is BatchCategoryClassificationResponse
+    assert "\"category_sets\"" in kwargs["input"]
 
 
 def test_cached_songs_are_excluded_from_batch_request_but_returned(tmp_path: Path) -> None:
@@ -436,6 +444,41 @@ def test_validate_batch_response_rejects_missing_duplicate_and_extra_ids(tmp_pat
     )
     with pytest.raises(AzureClassificationError):
         classifier._validate_batch_response(candidates, bad_response)
+
+
+def test_category_batch_response_rejects_unknown_label(tmp_path: Path) -> None:
+    db = build_temp_db(tmp_path)
+    classifier = AzureOpenAIClassifier(
+        SetupSettings(
+            azure_openai_endpoint="https://example.openai.azure.com",
+            azure_openai_api_key="secret",
+            azure_openai_deployment="gpt-5.4",
+            google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
+            session_secret="secret",
+        ),
+        db,
+    )
+    candidate = make_candidate(1)
+    activity = next(category for category in built_in_category_sets() if category.id == "activity")
+    response = BatchCategoryClassificationResponse(
+        items=[
+            BatchCategoryClassificationItem(
+                video_id=candidate.video_id,
+                is_music=True,
+                assignments=[
+                    CategoryAssignment(
+                        category_id="activity",
+                        label_slugs=["not-a-real-label"],
+                        confidence=80,
+                        reason="bad label",
+                    )
+                ],
+            )
+        ]
+    )
+
+    with pytest.raises(AzureClassificationError):
+        classifier._validate_batch_response([candidate], response, [activity])
 
 
 def test_split_on_failure_recovers_by_recursing_into_smaller_batches(tmp_path: Path) -> None:
@@ -611,6 +654,32 @@ def test_delete_authorized_youtube_data_clears_runs_cache_and_tokens(tmp_path: P
     assert db.get_run("run-1") is None
 
 
+def test_custom_category_crud_and_archive(tmp_path: Path) -> None:
+    db = build_temp_db(tmp_path)
+    category = CategorySetDefinition(
+        id="custom-intent",
+        name="Listening Intent",
+        description="Custom playlist category.",
+        source="custom",
+        prompt="Organize songs by why I would listen to them.",
+        labels=[
+            CategoryLabelDefinition(slug="sing-along", name="Sing Along", description="Hooky vocal songs."),
+            CategoryLabelDefinition(slug="background", name="Background", description="Low-friction listening."),
+        ],
+    )
+
+    saved = db.save_custom_category_set(category)
+
+    assert saved.id == "custom-intent"
+    assert [item.id for item in db.list_custom_category_sets()] == ["custom-intent"]
+    assert db.get_custom_category_set("custom-intent").labels[0].name == "Sing Along"  # type: ignore[union-attr]
+
+    db.archive_custom_category_set("custom-intent")
+
+    assert db.list_custom_category_sets() == []
+    assert db.list_custom_category_sets(include_archived=True)[0].archived is True
+
+
 def test_reconcile_playlist_only_appends_missing_videos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db = build_temp_db(tmp_path)
     service = YouTubeService(
@@ -743,6 +812,70 @@ class FakeClassifier:
         }
 
 
+class FakeCategoryYouTubeService(FakeYouTubeService):
+    def ensure_managed_playlists(
+        self,
+        scope: RunScope,
+        source_playlist_title: str | None,
+        category_sets=None,
+    ):
+        result = {}
+        for category in category_sets:
+            for label in category.labels:
+                key = f"{category.id}:{label.slug}"
+                result[key] = type(
+                    "Playlist",
+                    (),
+                    {
+                        "playlist_id": f"managed-{key}",
+                        "title": build_managed_playlist_title(scope, label.name, source_playlist_title),
+                    },
+                )()
+        return result
+
+
+class FakeCategoryClassifier:
+    async def classify_candidates(self, candidates: list[SongCandidate], category_sets):
+        assert [category.id for category in category_sets] == ["mood", "activity"]
+        return {
+            "v1": SongCategoryClassification(
+                is_music=True,
+                assignments=[
+                    CategoryAssignment(
+                        category_id="mood",
+                        label_slugs=["happy-feel-good", "chill-relaxing"],
+                        confidence=82,
+                        reason="Soft vibe",
+                    ),
+                    CategoryAssignment(
+                        category_id="activity",
+                        label_slugs=["driving-road-trip"],
+                        confidence=76,
+                        reason="Road-trip fit",
+                    ),
+                ],
+            ),
+            "v2": SongCategoryClassification(is_music=False, assignments=[]),
+            "v3": SongCategoryClassification(
+                is_music=True,
+                assignments=[
+                    CategoryAssignment(
+                        category_id="mood",
+                        label_slugs=["energetic-hype"],
+                        confidence=91,
+                        reason="Gym energy",
+                    ),
+                    CategoryAssignment(
+                        category_id="activity",
+                        label_slugs=["workout"],
+                        confidence=92,
+                        reason="Workout fit",
+                    ),
+                ],
+            ),
+        }
+
+
 def test_preview_all_playlists_and_non_music_exclusion(tmp_path: Path) -> None:
     db = build_temp_db(tmp_path)
     organizer = OrganizerService(db, FakeYouTubeService(), FakeClassifier())
@@ -788,3 +921,35 @@ def test_preview_selected_playlists_supports_multiple_sources(tmp_path: Path) ->
     assert run.source_playlist_id == "source-1,source-2"
     assert run.source_playlist_title == "2 selected playlists"
     assert run.summary.total_candidates == 3
+
+
+def test_preview_with_activity_category_and_apply(tmp_path: Path) -> None:
+    db = build_temp_db(tmp_path)
+    youtube = FakeCategoryYouTubeService()
+    mood = next(category for category in built_in_category_sets() if category.id == "mood")
+    activity = next(category for category in built_in_category_sets() if category.id == "activity")
+    organizer = OrganizerService(db, youtube, FakeCategoryClassifier())
+
+    run = organizer.create_preview(
+        RunScope.SELECTED_PLAYLISTS,
+        source_playlist_ids=["source-1", "source-2"],
+        category_sets=[mood, activity],
+    )
+    v1 = next(item for item in run.items if item.video_id == "v1")
+
+    assert run.category_sets == [mood, activity]
+    assert v1.suggested_label_names(activity) == ["Driving/Road Trip"]
+
+    summary = organizer.apply_run(
+        run.run_id,
+        {
+            "activity": {
+                "v1": ["driving-road-trip"],
+                "v3": ["workout"],
+            }
+        },
+    )
+
+    assert summary["total_assignments"] == 5
+    assert youtube.reconciled["managed-activity:driving-road-trip"] == ["v1"]
+    assert youtube.reconciled["managed-activity:workout"] == ["v3"]
