@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import Lock
 from typing import Any
+import json
 import uuid
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -50,6 +51,7 @@ CONTACT_EMAIL = "ayush@scorptech.co"
 GOOGLE_PRIVACY_POLICY_URL = "http://www.google.com/policies/privacy"
 GOOGLE_SECURITY_SETTINGS_URL = "https://security.google.com/settings/security/permissions"
 YOUTUBE_TERMS_URL = "https://www.youtube.com/t/terms"
+PREVIEW_SELECTION_SESSION_KEY = "preview_selection"
 
 
 @dataclass
@@ -196,11 +198,15 @@ def available_category_sets() -> list[CategorySetDefinition]:
     return [*built_in_category_sets(), *db.list_custom_category_sets(include_archived=False)]
 
 
+def available_category_sets_by_id() -> dict[str, CategorySetDefinition]:
+    return {category.id: category for category in available_category_sets()}
+
+
 def resolve_category_sets(category_ids: list[str]) -> list[CategorySetDefinition]:
     normalized_ids = [slugify_label(category_id) for category_id in category_ids if category_id.strip()]
     if not normalized_ids:
         normalized_ids = [default_mood_category_set().id]
-    available = {category.id: category for category in available_category_sets()}
+    available = available_category_sets_by_id()
     category_sets = []
     for category_id in dict.fromkeys(normalized_ids):
         category = available.get(category_id)
@@ -210,6 +216,123 @@ def resolve_category_sets(category_ids: list[str]) -> list[CategorySetDefinition
     if not category_sets:
         raise HTTPException(status_code=400, detail="Choose at least one category set.")
     return category_sets
+
+
+def filter_category_set_labels(
+    category: CategorySetDefinition,
+    selected_label_slugs: list[str],
+) -> CategorySetDefinition:
+    selected = list(dict.fromkeys(slugify_label(slug) for slug in selected_label_slugs if str(slug).strip()))
+    labels = []
+    for slug in selected:
+        label = category.label_for_slug(slug)
+        if label is None:
+            raise HTTPException(status_code=400, detail=f"Unknown label '{slug}' for category '{category.id}'.")
+        labels.append(label)
+    if not labels:
+        raise ValueError("Choose at least one playlist label.")
+    return category.model_copy(update={"labels": labels})
+
+
+def resolve_selected_category_sets_from_form(form) -> list[CategorySetDefinition]:
+    if str(form.get("category_labels_submitted", "")).strip() != "1":
+        return resolve_category_sets([str(value) for value in form.getlist("category_ids")])
+
+    available = available_category_sets_by_id()
+    selections: dict[str, list[str]] = {}
+    for key, value in form.multi_items():
+        value = str(value).strip()
+        if not key.startswith("category_label__") or not value:
+            continue
+        category_id = slugify_label(key.replace("category_label__", "", 1))
+        if category_id not in available:
+            raise HTTPException(status_code=400, detail=f"Unknown category set: {category_id}")
+        selections.setdefault(category_id, []).append(slugify_label(value))
+
+    if not selections:
+        raise ValueError("Choose at least one category label before generating a preview.")
+
+    return [filter_category_set_labels(available[category_id], label_slugs) for category_id, label_slugs in selections.items()]
+
+
+def default_preview_selection(category_sets: list[CategorySetDefinition]) -> dict[str, object]:
+    mood = next((category for category in category_sets if category.id == default_mood_category_set().id), None)
+    return {
+        "selected_playlist_ids": [],
+        "category_labels": {mood.id: [label.slug for label in mood.labels]} if mood is not None else {},
+        "expanded_category_id": mood.id if mood is not None else "",
+    }
+
+
+def preview_selection_from_json(raw: str | None) -> dict[str, object]:
+    if not raw:
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def normalize_preview_selection(
+    selection: dict[str, object] | None,
+    category_sets: list[CategorySetDefinition],
+) -> dict[str, object]:
+    normalized = default_preview_selection(category_sets)
+    if not selection:
+        return normalized
+
+    selected_playlist_ids = selection.get("selected_playlist_ids", [])
+    if isinstance(selected_playlist_ids, list):
+        normalized["selected_playlist_ids"] = [
+            str(playlist_id).strip() for playlist_id in selected_playlist_ids if str(playlist_id).strip()
+        ]
+
+    available = {category.id: category for category in category_sets}
+    category_labels = selection.get("category_labels", {})
+    normalized_labels: dict[str, list[str]] = {}
+    if isinstance(category_labels, dict):
+        for category_id, raw_slugs in category_labels.items():
+            normalized_category_id = slugify_label(str(category_id))
+            category = available.get(normalized_category_id)
+            if category is None:
+                continue
+            if isinstance(raw_slugs, str):
+                raw_slugs = [raw_slugs]
+            if not isinstance(raw_slugs, list):
+                continue
+            allowed_slugs = {label.slug for label in category.labels}
+            slugs = [
+                slug
+                for slug in dict.fromkeys(slugify_label(str(slug)) for slug in raw_slugs if str(slug).strip())
+                if slug in allowed_slugs
+            ]
+            if slugs:
+                normalized_labels[normalized_category_id] = slugs
+
+    if normalized_labels:
+        normalized["category_labels"] = normalized_labels
+
+    expanded_category_id = slugify_label(str(selection.get("expanded_category_id", "")))
+    if expanded_category_id in available:
+        normalized["expanded_category_id"] = expanded_category_id
+    elif normalized["category_labels"]:
+        normalized["expanded_category_id"] = next(iter(normalized["category_labels"]))  # type: ignore[arg-type]
+
+    return normalized
+
+
+def selection_with_saved_category(
+    selection: dict[str, object],
+    category: CategorySetDefinition,
+) -> dict[str, object]:
+    next_selection = dict(selection)
+    raw_category_labels = next_selection.get("category_labels", {})
+    category_labels = dict(raw_category_labels) if isinstance(raw_category_labels, dict) else {}
+    category_labels[category.id] = [label.slug for label in category.labels]
+    next_selection["category_labels"] = category_labels
+    next_selection["expanded_category_id"] = category.id
+    return next_selection
 
 
 def custom_category_id(name: str) -> str:
@@ -347,7 +470,11 @@ def get_login_context(request: Request) -> dict[str, Any]:
     }
 
 
-def get_preview_context(request: Request, custom_proposal: dict[str, Any] | None = None) -> dict[str, Any]:
+def get_preview_context(
+    request: Request,
+    custom_proposal: dict[str, Any] | None = None,
+    preview_selection: dict[str, object] | None = None,
+) -> dict[str, Any]:
     settings = settings_service.get_settings()
     token_payload = google_token_payload(request)
     playlists = []
@@ -358,6 +485,12 @@ def get_preview_context(request: Request, custom_proposal: dict[str, Any] | None
             playlists = youtube_service.list_playlists(include_managed=False)
         except Exception as exc:
             errors.append(str(exc))
+    built_ins = built_in_category_sets()
+    custom_sets = db.list_custom_category_sets(include_archived=False)
+    category_sets = [*built_ins, *custom_sets]
+    if preview_selection is None:
+        preview_selection = request.session.pop(PREVIEW_SELECTION_SESSION_KEY, None)
+    normalized_selection = normalize_preview_selection(preview_selection, category_sets)
     return {
         "request": request,
         "app_name": APP_NAME,
@@ -368,9 +501,12 @@ def get_preview_context(request: Request, custom_proposal: dict[str, Any] | None
         "playlists": playlists,
         "run_scopes": list(RunScope),
         "mood_labels": MOOD_LABELS,
-        "built_in_category_sets": built_in_category_sets(),
-        "custom_category_sets": db.list_custom_category_sets(include_archived=False),
+        "built_in_category_sets": built_ins,
+        "custom_category_sets": custom_sets,
+        "available_category_sets": category_sets,
         "custom_proposal": custom_proposal,
+        "preview_selection": normalized_selection,
+        "preview_selection_json": json.dumps(normalized_selection),
     }
 
 
@@ -485,6 +621,7 @@ def propose_custom_category(
     category_name: str = Form(""),
     category_prompt: str = Form(""),
     target_count: str = Form("6"),
+    return_selection_json: str = Form(""),
 ):
     settings = settings_service.get_settings()
     if not settings.is_complete():
@@ -517,6 +654,7 @@ def propose_custom_category(
                 "target_count": parsed_target_count,
                 "labels": proposal.labels,
             },
+            preview_selection=preview_selection_from_json(return_selection_json),
         ),
     )
 
@@ -527,6 +665,7 @@ async def save_custom_category(request: Request):
     name = str(form.get("category_name", "")).strip()
     prompt = str(form.get("category_prompt", "")).strip()
     category_id = str(form.get("category_id", "")).strip()
+    return_selection_json = str(form.get("return_selection_json", ""))
     label_names = [str(value).strip() for value in form.getlist("label_name")]
     label_descriptions = [str(value).strip() for value in form.getlist("label_description")]
     if not name or not prompt:
@@ -544,6 +683,10 @@ async def save_custom_category(request: Request):
     except ValueError as exc:
         set_flash(request, str(exc), "error")
         return RedirectResponse(url="/preview", status_code=303)
+    request.session[PREVIEW_SELECTION_SESSION_KEY] = selection_with_saved_category(
+        preview_selection_from_json(return_selection_json),
+        category,
+    )
     set_flash(request, f"Custom category '{category.name}' saved.", "success")
     return RedirectResponse(url="/preview", status_code=303)
 
@@ -579,13 +722,13 @@ def google_callback(request: Request, code: str | None = None, state: str | None
 
 
 @app.post("/runs/preview")
-def preview_run(
-    request: Request,
-    scope: str = Form("selected_playlists"),
-    selected_playlist_id: str = Form(""),
-    selected_playlist_ids: list[str] = Form(default=[]),
-    category_ids: list[str] = Form(default=[]),
-):
+async def preview_run(request: Request):
+    form = await request.form()
+    scope = str(form.get("scope", "selected_playlists"))
+    selected_playlist_id = str(form.get("selected_playlist_id", "")).strip()
+    selected_playlist_ids = [
+        str(playlist_id).strip() for playlist_id in form.getlist("selected_playlist_ids") if str(playlist_id).strip()
+    ]
     settings = settings_service.get_settings()
     if not settings.is_complete():
         set_flash(request, "Set all required environment variables before generating a preview.", "error")
@@ -608,7 +751,11 @@ def preview_run(
     if run_scope == RunScope.SINGLE_PLAYLIST and not selected_playlist_id:
         set_flash(request, "Choose a playlist before generating a preview.", "error")
         return RedirectResponse(url="/preview", status_code=303)
-    category_sets = resolve_category_sets(category_ids)
+    try:
+        category_sets = resolve_selected_category_sets_from_form(form)
+    except ValueError as exc:
+        set_flash(request, str(exc), "error")
+        return RedirectResponse(url="/preview", status_code=303)
     classifier = AzureOpenAIClassifier(settings, db)
     organizer = OrganizerService(db, youtube_service, classifier)
     try:

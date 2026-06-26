@@ -181,11 +181,12 @@ def test_preview_workspace_renders_playlists_and_preview_form(monkeypatch: pytes
     assert "<select" not in response.text
     assert 'data-loading-title="Generating preview..."' in response.text
     assert "Fetching playlists, classifying songs by category, and preparing the review screen." in response.text
-    assert "Playlist categories" in response.text
-    assert 'name="category_ids"' in response.text
+    assert "Categories" in response.text
+    assert 'name="category_label__mood"' in response.text
+    assert "Use entire set" in response.text
     assert "Mood" in response.text
     assert "Activity" in response.text
-    assert "Custom category builder" in response.text
+    assert "Custom category" in response.text
 
 
 def test_finish_page_requires_connection(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -435,6 +436,264 @@ def test_preview_classification_error_redirects(monkeypatch: pytest.MonkeyPatch)
     )
     assert response.status_code == 303
     assert response.headers["location"] == "/preview"
+
+
+def test_preview_accepts_selected_category_label_subset(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeSettingsService:
+        def get_settings(self):
+            return SetupSettings(
+                azure_openai_endpoint="https://example.openai.azure.com",
+                azure_openai_api_key="secret",
+                azure_openai_deployment="gpt-5.4",
+                google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
+                session_secret="secret",
+            )
+
+    class FakeYouTubeService:
+        def __init__(self, settings, db, token_payload=None):
+            pass
+
+        def has_token(self):
+            return True
+
+    class FakeOrganizerService:
+        def __init__(self, db, youtube_service, classifier):
+            pass
+
+        def create_preview(
+            self,
+            scope,
+            source_playlist_id=None,
+            source_playlist_ids=None,
+            persist=True,
+            category_sets=None,
+        ):
+            assert scope == RunScope.SELECTED_PLAYLISTS
+            assert source_playlist_ids == ["playlist-1"]
+            assert [category.id for category in category_sets] == ["mood", "activity"]
+            assert [label.slug for label in category_sets[0].labels] == ["happy-feel-good"]
+            assert [label.slug for label in category_sets[1].labels] == ["workout", "focus-study"]
+            return RunDetail(
+                run_id="run-123",
+                status=RunStatus.PREVIEWED,
+                scope=RunScope.SELECTED_PLAYLISTS,
+                created_at="2026-04-28T00:00:00+00:00",
+                summary=RunSummary(total_candidates=1, classified_count=1, default_included_count=1, excluded_count=0),
+                items=[
+                    RunItemView(
+                        video_id="video-1",
+                        title="Song One",
+                        channel_title="Artist One",
+                        description="desc",
+                        source_playlists=["Road Trip"],
+                        source_positions=[0],
+                        suggested_moods=[MoodLabel.HAPPY],
+                        final_moods=[MoodLabel.HAPPY],
+                        confidence=92,
+                        reason="Upbeat metadata.",
+                        is_music=True,
+                        default_included=True,
+                    )
+                ],
+                category_sets=category_sets,
+            )
+
+    monkeypatch.setattr("app.main.settings_service", FakeSettingsService())
+    monkeypatch.setattr("app.main.google_token_payload", lambda request: {"access_token": "token"})
+    monkeypatch.setattr("app.main.YouTubeService", FakeYouTubeService)
+    monkeypatch.setattr("app.main.OrganizerService", FakeOrganizerService)
+
+    client = TestClient(app)
+    response = client.post(
+        "/runs/preview",
+        data={
+            "scope": "selected_playlists",
+            "selected_playlist_ids": "playlist-1",
+            "category_labels_submitted": "1",
+            "category_label__mood": "happy-feel-good",
+            "category_label__activity": ["workout", "focus-study"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Preview ready" in response.text
+    assert "Final labels" in response.text
+    assert "Happy / Feel-good" in response.text
+    assert "Sad / Emotional" not in response.text
+
+
+def test_preview_legacy_category_ids_select_full_category(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeSettingsService:
+        def get_settings(self):
+            return SetupSettings(
+                azure_openai_endpoint="https://example.openai.azure.com",
+                azure_openai_api_key="secret",
+                azure_openai_deployment="gpt-5.4",
+                google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
+                session_secret="secret",
+            )
+
+    class FakeYouTubeService:
+        def __init__(self, settings, db, token_payload=None):
+            pass
+
+        def has_token(self):
+            return True
+
+    class FakeOrganizerService:
+        def __init__(self, db, youtube_service, classifier):
+            pass
+
+        def create_preview(
+            self,
+            scope,
+            source_playlist_id=None,
+            source_playlist_ids=None,
+            persist=True,
+            category_sets=None,
+        ):
+            assert [category.id for category in category_sets] == ["activity"]
+            assert len(category_sets[0].labels) == 6
+            return RunDetail(
+                run_id="run-123",
+                status=RunStatus.PREVIEWED,
+                scope=RunScope.SELECTED_PLAYLISTS,
+                created_at="2026-04-28T00:00:00+00:00",
+                summary=RunSummary(total_candidates=0, classified_count=0, default_included_count=0, excluded_count=0),
+                items=[],
+                category_sets=category_sets,
+            )
+
+    monkeypatch.setattr("app.main.settings_service", FakeSettingsService())
+    monkeypatch.setattr("app.main.google_token_payload", lambda request: {"access_token": "token"})
+    monkeypatch.setattr("app.main.YouTubeService", FakeYouTubeService)
+    monkeypatch.setattr("app.main.OrganizerService", FakeOrganizerService)
+
+    client = TestClient(app)
+    response = client.post(
+        "/runs/preview",
+        data={"scope": "selected_playlists", "selected_playlist_ids": "playlist-1", "category_ids": "activity"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_preview_rejects_empty_or_unknown_category_labels(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeSettingsService:
+        def get_settings(self):
+            return SetupSettings(
+                azure_openai_endpoint="https://example.openai.azure.com",
+                azure_openai_api_key="secret",
+                azure_openai_deployment="gpt-5.4",
+                google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
+                session_secret="secret",
+            )
+
+    class FakeYouTubeService:
+        def __init__(self, settings, db, token_payload=None):
+            pass
+
+        def has_token(self):
+            return True
+
+    monkeypatch.setattr("app.main.settings_service", FakeSettingsService())
+    monkeypatch.setattr("app.main.google_token_payload", lambda request: {"access_token": "token"})
+    monkeypatch.setattr("app.main.YouTubeService", FakeYouTubeService)
+
+    client = TestClient(app)
+    empty_response = client.post(
+        "/runs/preview",
+        data={
+            "scope": "selected_playlists",
+            "selected_playlist_ids": "playlist-1",
+            "category_labels_submitted": "1",
+        },
+        follow_redirects=False,
+    )
+    assert empty_response.status_code == 303
+    assert empty_response.headers["location"] == "/preview"
+
+    unknown_response = client.post(
+        "/runs/preview",
+        data={
+            "scope": "selected_playlists",
+            "selected_playlist_ids": "playlist-1",
+            "category_labels_submitted": "1",
+            "category_label__mood": "not-real",
+        },
+    )
+    assert unknown_response.status_code == 400
+
+
+def test_custom_category_save_restores_selection_and_selects_saved_category(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSettingsService:
+        def get_settings(self):
+            return SetupSettings(
+                azure_openai_endpoint="https://example.openai.azure.com",
+                azure_openai_api_key="secret",
+                azure_openai_deployment="gpt-5.4",
+                google_client_secrets_json=GOOGLE_CLIENT_SECRETS_JSON,
+                session_secret="secret",
+            )
+
+    class FakeDb:
+        def __init__(self):
+            self.categories = []
+
+        def list_custom_category_sets(self, include_archived=False):
+            return self.categories
+
+        def get_custom_category_set(self, category_id):
+            return next((category for category in self.categories if category.id == category_id), None)
+
+        def save_custom_category_set(self, category):
+            self.categories = [existing for existing in self.categories if existing.id != category.id]
+            self.categories.append(category)
+            return category
+
+    class FakeYouTubeService:
+        def __init__(self, settings, db, token_payload=None):
+            pass
+
+        def list_playlists(self, include_managed=False):
+            return [
+                PlaylistSummary(
+                    playlist_id="playlist-1",
+                    title="Road Trip",
+                    description="desc",
+                    privacy_status="private",
+                    item_count=12,
+                )
+            ]
+
+    fake_db = FakeDb()
+    monkeypatch.setattr("app.main.db", fake_db)
+    monkeypatch.setattr("app.main.settings_service", FakeSettingsService())
+    monkeypatch.setattr("app.main.google_token_payload", lambda request: {"access_token": "token"})
+    monkeypatch.setattr("app.main.YouTubeService", FakeYouTubeService)
+
+    client = TestClient(app)
+    response = client.post(
+        "/categories/custom/save",
+        data={
+            "category_id": "custom-listening",
+            "category_name": "Listening Intent",
+            "category_prompt": "Group songs by why I play them.",
+            "return_selection_json": '{"selected_playlist_ids":["playlist-1"],"category_labels":{"mood":["happy-feel-good"]},"expanded_category_id":"mood"}',
+            "label_name": ["Sing Along", "Discovery"],
+            "label_description": ["Songs I want to sing with.", "New or exploratory listening."],
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "Listening Intent" in response.text
+    assert 'name="category_label__custom-listening"' in response.text
+    assert 'value="sing-along"' in response.text
+    assert 'value="discovery"' in response.text
+    assert "Road Trip" in response.text
 
 
 def test_apply_sync_error_redirects(monkeypatch: pytest.MonkeyPatch) -> None:

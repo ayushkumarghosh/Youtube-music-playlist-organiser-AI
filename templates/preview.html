@@ -54,7 +54,13 @@
         <div class="playlist-select-grid" data-playlist-grid>
           {% for playlist in playlists %}
             <label class="playlist-select-card">
-              <input type="checkbox" name="selected_playlist_ids" value="{{ playlist.playlist_id }}" data-playlist-checkbox>
+              <input
+                type="checkbox"
+                name="selected_playlist_ids"
+                value="{{ playlist.playlist_id }}"
+                data-playlist-checkbox
+                {% if playlist.playlist_id in preview_selection.selected_playlist_ids %}checked{% endif %}
+              >
               <span class="playlist-check" aria-hidden="true"></span>
               <span class="playlist-card-main">
                 <strong>{{ playlist.title }}</strong>
@@ -74,41 +80,91 @@
       <div class="category-picker">
         <div class="picker-toolbar compact-toolbar">
           <div class="section-heading">
-            <h2>Playlist categories</h2>
-            <p><span data-category-count>1</span> category set selected.</p>
+            <h2>Categories</h2>
+            <p>
+              <span data-category-count>1</span> category set selected ·
+              <span data-label-count>0</span> labels selected.
+            </p>
           </div>
         </div>
-        <div class="category-select-grid" data-category-grid>
-          {% for category in built_in_category_sets %}
-            <label class="category-select-card">
-              <input
-                type="checkbox"
-                name="category_ids"
-                value="{{ category.id }}"
-                data-category-checkbox
-                {% if category.id == "mood" %}checked{% endif %}
-              >
-              <span class="playlist-check" aria-hidden="true"></span>
-              <span class="playlist-card-main">
-                <strong>{{ category.name }}</strong>
-                <span>{{ category.labels|length }} playlist types</span>
-              </span>
-            </label>
-          {% endfor %}
-          {% for category in custom_category_sets %}
-            <label class="category-select-card custom-category-card">
-              <input type="checkbox" name="category_ids" value="{{ category.id }}" data-category-checkbox>
-              <span class="playlist-check" aria-hidden="true"></span>
-              <span class="playlist-card-main">
-                <strong>{{ category.name }}</strong>
-                <span>Custom · {{ category.labels|length }} playlist types</span>
-              </span>
-            </label>
+        <input type="hidden" name="category_labels_submitted" value="1">
+        <div class="category-accordion" data-category-grid>
+          {% for category in available_category_sets %}
+            {% set selected_slugs = preview_selection.category_labels.get(category.id, []) %}
+            {% set selected_count = selected_slugs|length %}
+            {% set is_expanded = preview_selection.expanded_category_id == category.id %}
+            <div
+              class="category-accordion-row{% if selected_count %} is-selected{% endif %}{% if category.source == 'custom' %} is-custom{% endif %}"
+              data-category-accordion
+              data-category-id="{{ category.id }}"
+            >
+              <div class="category-row-header">
+                <label class="category-row-select">
+                  <input type="checkbox" data-category-master {% if selected_count %}checked{% endif %}>
+                  <span class="playlist-check" aria-hidden="true"></span>
+                  <span class="category-row-title">
+                    <strong>{{ category.name }}</strong>
+                    <span>
+                      {% if category.source == "custom" %}Custom · {% endif %}{{ category.labels|length }} playlist labels
+                    </span>
+                  </span>
+                </label>
+                <div class="category-row-meta">
+                  <span class="category-label-preview">
+                    {% for label in category.labels[:3] %}
+                      {{ label.name }}{% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                    {% if category.labels|length > 3 %} +{{ category.labels|length - 3 }} more{% endif %}
+                  </span>
+                  <span class="category-summary" data-category-summary>
+                    {% if selected_count == category.labels|length %}
+                      All labels
+                    {% elif selected_count %}
+                      {{ selected_count }} of {{ category.labels|length }} labels
+                    {% else %}
+                      No labels selected
+                    {% endif %}
+                  </span>
+                  <button
+                    type="button"
+                    class="category-toggle"
+                    data-category-toggle
+                    aria-expanded="{{ 'true' if is_expanded else 'false' }}"
+                  >
+                    Labels
+                  </button>
+                </div>
+              </div>
+              <div class="category-label-panel{% if not is_expanded %} hidden{% endif %}" data-category-panel>
+                <label class="category-entire-set">
+                  <input type="checkbox" data-category-all {% if selected_count == category.labels|length %}checked{% endif %}>
+                  <span>Use entire set</span>
+                </label>
+                <div class="category-label-grid">
+                  {% for label in category.labels %}
+                    <label class="category-label-option">
+                      <input
+                        type="checkbox"
+                        name="category_label__{{ category.id }}"
+                        value="{{ label.slug }}"
+                        data-category-label
+                        {% if label.slug in selected_slugs %}checked{% endif %}
+                      >
+                      <span>{{ label.name }}</span>
+                    </label>
+                  {% endfor %}
+                </div>
+              </div>
+            </div>
           {% endfor %}
         </div>
       </div>
 
       <div class="picker-actions">
+        <div class="selection-summary">
+          <strong><span data-selection-count>0</span> playlists selected</strong>
+          <span><span data-label-count-inline>0</span> labels selected</span>
+        </div>
         <button type="submit" data-preview-submit disabled>
           Preview category assignments
         </button>
@@ -116,10 +172,10 @@
     </form>
   </section>
 
-  <section class="panel custom-category-panel">
+  <section class="panel custom-category-panel" id="custom-category">
     <div class="section-heading">
-      <h2>Custom category builder</h2>
-      <p>Describe a playlist system, let AI propose labels, then edit and save it for reuse.</p>
+      <h2>Custom category</h2>
+      <p>Create a reusable category, then select its labels from the category list.</p>
     </div>
 
     <form
@@ -129,6 +185,7 @@
       data-loading-title="Creating playlist labels..."
       data-loading-message="Generating editable custom playlist types from your prompt."
     >
+      <input type="hidden" name="return_selection_json" value="{{ preview_selection_json }}" data-preview-selection-field>
       <label>
         <span>Category name</span>
         <input type="text" name="category_name" value="{{ custom_proposal.name if custom_proposal else '' }}" placeholder="Example: Listening Intent" required>
@@ -148,6 +205,7 @@
 
     {% if custom_proposal %}
       <form action="/categories/custom/save" method="post" class="custom-label-editor">
+        <input type="hidden" name="return_selection_json" value="{{ preview_selection_json }}" data-preview-selection-field>
         <input type="hidden" name="category_name" value="{{ custom_proposal.name }}">
         <input type="hidden" name="category_prompt" value="{{ custom_proposal.prompt }}">
         <div class="inline-heading">
@@ -177,48 +235,53 @@
 
   {% if custom_category_sets %}
     <section class="panel custom-category-panel">
-      <div class="section-heading">
-        <h2>Saved custom categories</h2>
-        <p>Edit labels directly or archive a category you no longer use.</p>
-      </div>
-      <div class="saved-category-list">
-        {% for category in custom_category_sets %}
-          <div class="saved-category">
-            <form action="/categories/custom/save" method="post" class="saved-category-form">
-              <input type="hidden" name="category_id" value="{{ category.id }}">
-              <label>
-                <span>Category name</span>
-                <input type="text" name="category_name" value="{{ category.name }}" required>
-              </label>
-              <label>
-                <span>Prompt</span>
-                <textarea name="category_prompt" rows="3" required>{{ category.prompt }}</textarea>
-              </label>
-              <div class="custom-label-grid">
-                {% for label in category.labels %}
-                  <div class="custom-label-row">
-                    <label>
-                      <span>Playlist label</span>
-                      <input type="text" name="label_name" value="{{ label.name }}" required>
-                    </label>
-                    <label>
-                      <span>Guidance</span>
-                      <input type="text" name="label_description" value="{{ label.description }}">
-                    </label>
-                  </div>
-                {% endfor %}
-              </div>
-              <div class="form-actions">
-                <button type="submit">Update</button>
-              </div>
-            </form>
-            <form action="/categories/custom/archive" method="post">
-              <input type="hidden" name="category_id" value="{{ category.id }}">
-              <button type="submit" class="secondary-action">Archive</button>
-            </form>
-          </div>
-        {% endfor %}
-      </div>
+      <details class="saved-category-manager">
+        <summary>
+          <span>
+            <strong>Manage saved custom categories</strong>
+            <em>{{ custom_category_sets|length }} saved</em>
+          </span>
+        </summary>
+        <div class="saved-category-list">
+          {% for category in custom_category_sets %}
+            <div class="saved-category">
+              <form action="/categories/custom/save" method="post" class="saved-category-form">
+                <input type="hidden" name="return_selection_json" value="{{ preview_selection_json }}" data-preview-selection-field>
+                <input type="hidden" name="category_id" value="{{ category.id }}">
+                <label>
+                  <span>Category name</span>
+                  <input type="text" name="category_name" value="{{ category.name }}" required>
+                </label>
+                <label>
+                  <span>Prompt</span>
+                  <textarea name="category_prompt" rows="3" required>{{ category.prompt }}</textarea>
+                </label>
+                <div class="custom-label-grid">
+                  {% for label in category.labels %}
+                    <div class="custom-label-row">
+                      <label>
+                        <span>Playlist label</span>
+                        <input type="text" name="label_name" value="{{ label.name }}" required>
+                      </label>
+                      <label>
+                        <span>Guidance</span>
+                        <input type="text" name="label_description" value="{{ label.description }}">
+                      </label>
+                    </div>
+                  {% endfor %}
+                </div>
+                <div class="form-actions">
+                  <button type="submit">Update</button>
+                </div>
+              </form>
+              <form action="/categories/custom/archive" method="post">
+                <input type="hidden" name="category_id" value="{{ category.id }}">
+                <button type="submit" class="secondary-action">Archive</button>
+              </form>
+            </div>
+          {% endfor %}
+        </div>
+      </details>
     </section>
   {% endif %}
 {% endblock %}

@@ -57,66 +57,66 @@
         </div>
       </div>
 
-      <div class="table-wrap">
-        <table class="results-table">
-          <thead>
-            <tr>
-              <th>Song</th>
-              <th>Source</th>
-              <th>Confidence</th>
-              <th>Reason</th>
-              <th>Final categories</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for item in run.items %}
-              <tr data-filter="{{ (item.title ~ ' ' ~ item.channel_title ~ ' ' ~ item.source_playlists|join(' '))|lower }}">
-                <td class="song-cell">
-                  <strong>{{ item.title }}</strong>
-                  <div class="subtle">{{ item.channel_title }}</div>
-                  {% if not item.is_music %}
-                    <div class="badge muted">Excluded by default</div>
-                  {% endif %}
-                </td>
-                <td>
-                  {% for source in item.source_playlists %}
-                    <div>{{ source }}{% if item.source_positions|length > loop.index0 %} &middot; #{{ item.source_positions[loop.index0] + 1 }}{% endif %}</div>
-                  {% endfor %}
-                </td>
-                <td>
-                  <span class="confidence">{{ item.confidence }}</span>
-                </td>
-                <td class="reason-cell">{{ item.reason }}</td>
-                <td class="assignment-cell">
-                  {% for category in run.category_sets %}
-                    {% set suggested_names = item.suggested_label_names(category) %}
-                    {% set final_slugs = item.final_label_slugs(category.id) %}
-                    <div class="assignment-group">
-                      <div class="assignment-group-heading">
-                        <strong>{{ category.name }}</strong>
-                        <span>{{ suggested_names|join(", ") or "No model label" }}</span>
-                      </div>
-                      <input type="hidden" name="assignment__{{ category.id }}__{{ item.video_id }}" value="">
-                      <div class="mood-options category-options">
-                        {% for label in category.labels %}
-                          <label class="mood-option">
-                            <input
-                              type="checkbox"
-                              name="assignment__{{ category.id }}__{{ item.video_id }}"
-                              value="{{ label.slug }}"
-                              {% if label.slug in final_slugs %}checked{% endif %}
-                            >
-                            <span>{{ label.name }}</span>
-                          </label>
-                        {% endfor %}
-                      </div>
-                    </div>
-                  {% endfor %}
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+      <div class="review-list">
+        {% for item in run.items %}
+          <article class="review-song-row" data-filter="{{ (item.title ~ ' ' ~ item.channel_title ~ ' ' ~ item.source_playlists|join(' '))|lower }}">
+            <div class="review-song-main">
+              <div class="song-cell">
+                <strong>{{ item.title }}</strong>
+                <div class="subtle">{{ item.channel_title }}</div>
+                {% if not item.is_music %}
+                  <div class="badge muted">Excluded by default</div>
+                {% endif %}
+              </div>
+              <div class="review-source-list">
+                <span>Source</span>
+                {% for source in item.source_playlists %}
+                  <div>{{ source }}{% if item.source_positions|length > loop.index0 %} &middot; #{{ item.source_positions[loop.index0] + 1 }}{% endif %}</div>
+                {% endfor %}
+              </div>
+            </div>
+
+            <div class="review-evidence">
+              <div>
+                <span class="review-field-label">Confidence</span>
+                <span class="confidence">{{ item.confidence }}</span>
+              </div>
+              <div class="reason-cell">
+                <span class="review-field-label">Reason</span>
+                {{ item.reason }}
+              </div>
+            </div>
+
+            <div class="assignment-cell review-assignment-cell">
+              <span class="review-field-label">Final labels</span>
+              {% for category in run.category_sets %}
+                {% set suggested_names = item.suggested_label_names(category) %}
+                {% set suggested_slugs = item.suggested_label_slugs(category.id) %}
+                {% set final_slugs = item.final_label_slugs(category.id) %}
+                <div class="assignment-group">
+                  <div class="assignment-group-heading">
+                    <strong>{{ category.name }}</strong>
+                    <span>{{ suggested_names|join(", ") or "No model label" }}</span>
+                  </div>
+                  <input type="hidden" name="assignment__{{ category.id }}__{{ item.video_id }}" value="">
+                  <div class="mood-options category-options">
+                    {% for label in category.labels %}
+                      <label class="mood-option">
+                        <input
+                          type="checkbox"
+                          name="assignment__{{ category.id }}__{{ item.video_id }}"
+                          value="{{ label.slug }}"
+                          {% if label.slug in final_slugs %}checked{% endif %}
+                        >
+                        <span class="{% if label.slug in suggested_slugs %}is-suggested{% endif %}">{{ label.name }}</span>
+                      </label>
+                    {% endfor %}
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          </article>
+        {% endfor %}
       </div>
     </form>
   </section>
