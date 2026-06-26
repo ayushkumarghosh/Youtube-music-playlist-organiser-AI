@@ -3,7 +3,7 @@
   <div class="workspace-heading">
     <div>
       <h2>Choose playlists and categories</h2>
-      <p>Select source playlists, then choose the category sets VibeShelf should use for classification.</p>
+      <p>Select source playlists and category labels before previewing assignments.</p>
     </div>
     <form action="/auth/google/disconnect" method="post">
       <button type="submit" class="secondary-action">Disconnect YouTube</button>
@@ -24,26 +24,28 @@
     </section>
   {% endif %}
 
-  <section class="panel primary-panel playlist-picker-panel">
-    <form
-      action="/runs/preview"
-      method="post"
-      class="playlist-picker-form"
-      data-loading-title="Generating preview..."
-      data-loading-message="Fetching playlists, classifying songs by category, and preparing the review screen."
-    >
-      <input type="hidden" name="scope" value="selected_playlists">
+  <form
+    action="/runs/preview"
+    method="post"
+    id="preview-form"
+    class="preview-setup-form"
+    data-loading-title="Generating preview..."
+    data-loading-message="Fetching playlists, classifying songs by category, and preparing the review screen."
+  >
+    <input type="hidden" name="scope" value="selected_playlists">
 
+    <section class="panel primary-panel playlist-picker-panel">
       <div class="picker-toolbar">
         <div class="section-heading">
-          <h2>Source playlists</h2>
-          <p>
+          <h2>
+            1. Source playlists
             {% if playlists %}
-              <span data-selection-count>0</span> of {{ playlists|length }} selected.
-            {% else %}
-              No playlists loaded yet.
+              <span class="count-inline"><span data-selection-count>0</span> selected</span>
             {% endif %}
-          </p>
+          </h2>
+          {% if not playlists %}
+            <p>No playlists loaded yet.</p>
+          {% endif %}
         </div>
         <button type="button" class="secondary-action" data-select-all-playlists {% if not playlists %}disabled{% endif %}>
           Select all playlists
@@ -64,9 +66,9 @@
               <span class="playlist-check" aria-hidden="true"></span>
               <span class="playlist-card-main">
                 <strong>{{ playlist.title }}</strong>
-                <span>{{ playlist.privacy_status }}</span>
               </span>
-              <span class="playlist-card-count">{{ playlist.item_count }} items</span>
+              <span class="playlist-privacy">{{ playlist.privacy_status }}</span>
+              <span class="playlist-card-count">{{ playlist.item_count }} songs</span>
             </label>
           {% endfor %}
         </div>
@@ -76,15 +78,16 @@
           <p>Once YouTube returns playlists, they will appear here for preview generation.</p>
         </div>
       {% endif %}
+    </section>
 
+    <section class="panel category-picker-panel">
       <div class="category-picker">
         <div class="picker-toolbar compact-toolbar">
           <div class="section-heading">
-            <h2>Categories</h2>
-            <p>
-              <span data-category-count>1</span> category set selected ·
-              <span data-label-count>0</span> labels selected.
-            </p>
+            <h2>
+              2. Categories
+              <span class="count-inline"><span data-category-count>1</span> selected · <span data-label-count>0</span> labels</span>
+            </h2>
           </div>
         </div>
         <input type="hidden" name="category_labels_submitted" value="1">
@@ -105,17 +108,11 @@
                   <span class="category-row-title">
                     <strong>{{ category.name }}</strong>
                     <span>
-                      {% if category.source == "custom" %}Custom · {% endif %}{{ category.labels|length }} playlist labels
+                      {% if category.source == "custom" %}Custom · {% endif %}{{ category.labels|length }} labels
                     </span>
                   </span>
                 </label>
                 <div class="category-row-meta">
-                  <span class="category-label-preview">
-                    {% for label in category.labels[:3] %}
-                      {{ label.name }}{% if not loop.last %}, {% endif %}
-                    {% endfor %}
-                    {% if category.labels|length > 3 %} +{{ category.labels|length - 3 }} more{% endif %}
-                  </span>
                   <span class="category-summary" data-category-summary>
                     {% if selected_count == category.labels|length %}
                       All labels
@@ -130,15 +127,16 @@
                     class="category-toggle"
                     data-category-toggle
                     aria-expanded="{{ 'true' if is_expanded else 'false' }}"
+                    aria-label="Toggle {{ category.name }} labels"
                   >
-                    Labels
+                    <span class="category-toggle-icon" aria-hidden="true"></span>
                   </button>
                 </div>
               </div>
               <div class="category-label-panel{% if not is_expanded %} hidden{% endif %}" data-category-panel>
                 <label class="category-entire-set">
                   <input type="checkbox" data-category-all {% if selected_count == category.labels|length %}checked{% endif %}>
-                  <span>Use entire set</span>
+                  <span>Use entire set <em>(select all {{ category.labels|length }} labels)</em></span>
                 </label>
                 <div class="category-label-grid">
                   {% for label in category.labels %}
@@ -159,23 +157,16 @@
           {% endfor %}
         </div>
       </div>
-
-      <div class="picker-actions">
-        <div class="selection-summary">
-          <strong><span data-selection-count>0</span> playlists selected</strong>
-          <span><span data-label-count-inline>0</span> labels selected</span>
-        </div>
-        <button type="submit" data-preview-submit disabled>
-          Preview category assignments
-        </button>
-      </div>
-    </form>
-  </section>
+    </section>
+  </form>
 
   <section class="panel custom-category-panel" id="custom-category">
-    <div class="section-heading">
-      <h2>Custom category</h2>
-      <p>Create a reusable category, then select its labels from the category list.</p>
+    <div class="section-heading custom-category-heading">
+      <div>
+        <h2>3. Custom category</h2>
+        <p>Create a reusable category, then select its labels from the category list.</p>
+      </div>
+      <span class="optional-badge">Optional</span>
     </div>
 
     <form
@@ -191,11 +182,11 @@
         <input type="text" name="category_name" value="{{ custom_proposal.name if custom_proposal else '' }}" placeholder="Example: Listening Intent" required>
       </label>
       <label>
-        <span>Free-form prompt</span>
-        <textarea name="category_prompt" rows="4" placeholder="Example: Create playlists for why I might play a song: background, singing along, discovery, nostalgia, deep focus." required>{{ custom_proposal.prompt if custom_proposal else '' }}</textarea>
+        <span>Prompt</span>
+        <textarea name="category_prompt" rows="3" placeholder="Example: Create playlists for why I might play a song: background, singing along, discovery, nostalgia, deep focus." required>{{ custom_proposal.prompt if custom_proposal else '' }}</textarea>
       </label>
       <label>
-        <span>Target playlist count</span>
+        <span>Count</span>
         <input type="number" name="target_count" min="2" max="12" value="{{ custom_proposal.target_count if custom_proposal else 6 }}" required>
       </label>
       <div class="form-actions">
@@ -231,6 +222,18 @@
         </div>
       </form>
     {% endif %}
+  </section>
+
+  <section class="panel picker-actions-panel">
+    <div class="selection-summary">
+      <strong><span data-selection-count>0</span></strong>
+      <span>playlists selected</span>
+      <strong><span data-label-count-inline>0</span></strong>
+      <span>labels selected</span>
+    </div>
+    <button type="submit" form="preview-form" data-preview-submit disabled>
+      Preview assignments
+    </button>
   </section>
 
   {% if custom_category_sets %}

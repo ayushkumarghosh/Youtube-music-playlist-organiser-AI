@@ -3,13 +3,11 @@
   <section class="panel run-panel">
     <div class="run-summary">
       <div>
-        <p class="eyebrow">Run {{ run.run_id }}</p>
         <h2>Preview ready</h2>
       </div>
-      <div class="status-pill">{{ run.status.value }}</div>
     </div>
 
-    <div class="metric-grid">
+    <div class="run-kpi-grid">
       <div class="metric">
         <span>Total songs</span>
         <strong>{{ run.summary.total_candidates }}</strong>
@@ -20,16 +18,20 @@
       </div>
       <div class="metric">
         <span>Categories</span>
-        <strong>{{ run.category_sets|length }}</strong>
+        <strong>{{ run.category_sets|length }}{% if run.category_sets %} ({{ run.category_sets|map(attribute="name")|join(", ") }}){% endif %}</strong>
       </div>
-    </div>
-
-    <div class="run-meta">
-      <span>Scope: {{ run.scope.value }}</span>
-      {% if run.source_playlist_title %}
-        <span>Source: {{ run.source_playlist_title }}</span>
-      {% endif %}
-      <span>Created: {{ run.created_at }}</span>
+      <div class="metric">
+        <span>Scope</span>
+        <strong>{{ run.scope.value }}</strong>
+      </div>
+      <div class="metric">
+        <span>Source</span>
+        <strong>{{ run.source_playlist_title or "Selected playlists" }}</strong>
+      </div>
+      <div class="metric">
+        <span>Created</span>
+        <strong>{{ run.created_at }}</strong>
+      </div>
     </div>
   </section>
 
@@ -46,19 +48,25 @@
       <input type="hidden" name="run_state" value="{{ run_state }}">
 
       <div class="review-toolbar">
-        <div class="section-heading">
+        <div class="section-heading review-heading-block">
           <h2>Review assignments</h2>
-          <p>Search, adjust category labels, then sync the final set.</p>
+          <p>Review and edit the AI-assigned labels before applying to YouTube.</p>
+          <input type="search" id="filter-input" placeholder="Search songs" data-row-filter>
         </div>
         <div class="toolbar-actions">
-          <input type="search" id="filter-input" placeholder="Search songs, artists, playlists" data-row-filter>
           <a class="secondary-button" href="/preview">Back</a>
           <button type="submit">Apply to YouTube</button>
         </div>
       </div>
 
       <div class="review-list">
+        <div class="review-list-heading" aria-hidden="true">
+          <span>Song / Channel<br>Source (Position)</span>
+          <span>Confidence<br>Reason</span>
+          <span>Final labels<br>Edit labels within the categories you selected.</span>
+        </div>
         {% for item in run.items %}
+          {% set row_index = loop.index %}
           <article class="review-song-row" data-filter="{{ (item.title ~ ' ' ~ item.channel_title ~ ' ' ~ item.source_playlists|join(' '))|lower }}">
             <div class="review-song-main">
               <div class="song-cell">
@@ -88,32 +96,45 @@
             </div>
 
             <div class="assignment-cell review-assignment-cell">
-              <span class="review-field-label">Final labels</span>
-              {% for category in run.category_sets %}
-                {% set suggested_names = item.suggested_label_names(category) %}
-                {% set suggested_slugs = item.suggested_label_slugs(category.id) %}
-                {% set final_slugs = item.final_label_slugs(category.id) %}
-                <div class="assignment-group">
-                  <div class="assignment-group-heading">
-                    <strong>{{ category.name }}</strong>
-                    <span>{{ suggested_names|join(", ") or "No model label" }}</span>
-                  </div>
-                  <input type="hidden" name="assignment__{{ category.id }}__{{ item.video_id }}" value="">
-                  <div class="mood-options category-options">
-                    {% for label in category.labels %}
-                      <label class="mood-option">
-                        <input
-                          type="checkbox"
-                          name="assignment__{{ category.id }}__{{ item.video_id }}"
-                          value="{{ label.slug }}"
-                          {% if label.slug in final_slugs %}checked{% endif %}
-                        >
-                        <span class="{% if label.slug in suggested_slugs %}is-suggested{% endif %}">{{ label.name }}</span>
-                      </label>
-                    {% endfor %}
-                  </div>
+              <details class="assignment-details" {% if row_index <= 2 %}open{% endif %}>
+                <summary class="assignment-summary">
+                  {% for category in run.category_sets %}
+                    {% set final_names = item.final_label_names(category) %}
+                    {% if final_names %}
+                      <span><strong>{{ category.name }}:</strong> {{ final_names|join(", ") }}</span>
+                    {% endif %}
+                  {% endfor %}
+                  <i aria-hidden="true"></i>
+                </summary>
+                <div class="assignment-edit-groups">
+                  <span class="review-field-label">Final labels</span>
+                  {% for category in run.category_sets %}
+                    {% set suggested_names = item.suggested_label_names(category) %}
+                    {% set suggested_slugs = item.suggested_label_slugs(category.id) %}
+                    {% set final_slugs = item.final_label_slugs(category.id) %}
+                    <div class="assignment-group">
+                      <div class="assignment-group-heading">
+                        <strong>{{ category.name }}</strong>
+                        <span>{{ suggested_names|join(", ") or "No model label" }}</span>
+                      </div>
+                      <input type="hidden" name="assignment__{{ category.id }}__{{ item.video_id }}" value="">
+                      <div class="mood-options category-options">
+                        {% for label in category.labels %}
+                          <label class="mood-option">
+                            <input
+                              type="checkbox"
+                              name="assignment__{{ category.id }}__{{ item.video_id }}"
+                              value="{{ label.slug }}"
+                              {% if label.slug in final_slugs %}checked{% endif %}
+                            >
+                            <span class="{% if label.slug in suggested_slugs %}is-suggested{% endif %}">{{ label.name }}</span>
+                          </label>
+                        {% endfor %}
+                      </div>
+                    </div>
+                  {% endfor %}
                 </div>
-              {% endfor %}
+              </details>
             </div>
           </article>
         {% endfor %}
